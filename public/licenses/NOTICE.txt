@@ -1,0 +1,73 @@
+Overloaded third-party notices
+Full license texts sit next to this file.
+
+Shipped in this build
+---------------------
+webmcp-types
+  License: MIT
+  Type definitions for document.modelContext. No runtime code.
+
+three (r180)
+  License: MIT
+  The renderer behind the board. We use the core library plus one addon
+  from the published package -- BufferGeometryUtils.mergeGeometries, to
+  weld each unit model into a single instanced mesh. No three.js example
+  assets, models or textures are shipped. Text: three-MIT.txt
+
+@fontsource-variable/cinzel
+  License: SIL Open Font License 1.1
+  Display face. Roman capitals cut for the wordmark, panel headings and
+  formation names. Text: cinzel-OFL.txt
+
+@fontsource-variable/source-serif-4
+  License: SIL Open Font License 1.1
+  Body face. Carries the dispatch feed and the order-book sentences, which
+  are meant to read as prose rather than as form fields.
+  Text: source-serif-4-OFL.txt
+
+@fontsource-variable/oswald
+  License: SIL Open Font License 1.1
+  Utility face. Condensed gothic for numbers, chips and buttons.
+  Text: oswald-OFL.txt
+
+Terrain technique (MIT, adapted — the studio is not vendored)
+  ZyFou/ProceduralTerrains src/engine/terrain/terrainGLSL.js
+  — hash12, quintic vnoise, ridgedFBM with spectral carry.
+  Ported to src/domain/noise.ts. License: MIT (ProceduralTerrains-MIT.txt).
+  We did not import the React editor or the GPL Blender plugin.
+
+Original work in this repo
+--------------------------
+Everything the player sees or hears is generated in this repository and
+ships as code, not as assets:
+
+  src/ui/terrainArt.ts   the board skin — hypsometric wash, north-west
+                         relief, hedged parcels, furrows, drawn scrub and
+                         ribbon roads, baked once on a Canvas 2D surface
+                         and used as the terrain texture
+  src/render/models.ts   every model on the field — infantry, cavalry,
+                         field guns, trees, cottages, forts, redoubts and
+                         depots — cut from primitives in code and welded
+                         into instanced meshes
+  src/render/board.ts    the 3D board itself: displaced terrain, water,
+                         fog veil, camera and lighting
+  src/ui/overlay.ts      borders, supply routes, works, formations,
+                         tracers, fog and banners, drawn per frame
+  src/audio/sound.ts     every sound in the game, synthesised at runtime
+                         through the Web Audio API — bugle calls over a
+                         natural harmonic series, filtered noise for
+                         volleys and cannon, a convolution reverb built
+                         from a decaying noise burst, and distance
+                         modelled as gain, air absorption and reverb send
+
+No sample libraries, model files, texture files or image assets are shipped.
+public/ contains a favicon, two Cloudflare routing files and these notices.
+
+Removed from earlier builds
+---------------------------
+An earlier first-person build carried postprocessing, n8ao and
+@dgreenheck/ez-tree. All three were deleted along with every texture,
+model and license that supported them, and nothing from those packages
+remains in the source tree, the dependency list or the shipped bundle.
+three.js stayed: the game is now a top-down real-time strategy board and
+still renders through it.

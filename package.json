@@ -1,0 +1,32 @@
+{
+  "name": "overloaded",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "deploy": "npm run build && wrangler pages deploy dist --project-name overloaded",
+    "lint": "oxlint src"
+  },
+  "dependencies": {
+    "@fontsource-variable/cinzel": "5.3.0",
+    "@fontsource-variable/oswald": "^5.3.0",
+    "@fontsource-variable/source-serif-4": "5.3.0",
+    "three": "0.180.0",
+    "webmcp-types": "^0.1.5"
+  },
+  "devDependencies": {
+    "@types/three": "0.180.0",
+    "oxlint": "1.42.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.2.2",
+    "wrangler": "^4.127.1"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "workerd@1.20260828.1": true
+  }
+}
