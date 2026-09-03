@@ -1,125 +1,148 @@
+import { ACTIONS, CONTACT_TRIGGERS } from "./constants";
 import type {
-  ActionKind, Alert, Cell, EventKind, GameEvent, Rule, RuleTarget, Side,
-  UnitType, WhereKind,
+  ActionKind, Alert, Cell, GameEvent, OrderActor, OrderPlace, Rule, Side, Trigger,
+  UnitType, Watched,
 } from "./types";
 
 /**
- * The standing-orders book.
+ * Standing orders.
  *
- * A rule is one English sentence with the nouns and verbs swapped for chips:
+ * An order is written to one named formation or one named building and set off
+ * by one named thing: "Alpha attacks the attacker when it comes under fire",
+ * "Headquarters raises 16 infantry when the war chest passes 800 crates".
+ * Nothing in it is a wildcard, and nothing in it is a place the player cannot
+ * point at, because an order that fires on "any formation" at "where it
+ * happened" is an order nobody can predict.
  *
- *   WHEN <event> happens to <subject>, <actor> performs <action> at <where>.
+ * The book is not swept on a timer. An order belongs to the thing it watches:
+ * the match hands each report straight to `fireOrders` in the instant it is
+ * raised, and the orders written against that thing go out with it.
  *
- * The subject raises an alert; the actor answers it. Subject and actor may be
- * the same thing, which is how a battalion reacts to its own trouble, and the
- * actor may be a place rather than a formation, which is how a base answers a
- * raid by raising more men.
- *
- * Everything here is data. The match emits `GameEvent`s and calls `runRules`;
- * nothing in this file touches units directly, so the same book is legible to
- * the player, to the bot, and to an agent over WebMCP without three copies of
- * the logic.
+ * Everything here is data. The same vocabulary is exported into the WebMCP
+ * schema, so an order written by the player and one written by an agent are
+ * the same object.
  */
 
-export const EVENT_TEXT: Record<EventKind, string> = {
-  spotted: "sights the enemy",
+/** What the watched thing has to do, in the third person. */
+export const TRIGGER_TEXT: Record<Trigger, string> = {
   under_fire: "comes under fire",
-  weakened: "falls below strength",
-  arrived: "reaches its objective",
+  spotted: "sights the enemy",
+  weakened: "is cut down",
+  arrived: "reaches its ground",
   idle: "has nothing to do",
-  threatened: "is threatened",
+  threatened: "has the enemy at its gate",
   supply_cut: "loses its supply line",
   supply_restored: "is back in supply",
   captured: "is taken",
   lost: "is lost",
   destroyed: "is destroyed",
-  timer: "every so often",
+  supply_above: "passes",
 };
 
-export const ACTION_TEXT: Record<ActionKind, string> = {
-  move: "march",
-  hold: "hold",
-  attack_area: "attack",
-  bombard: "bombard",
-  charge: "charge",
-  retreat: "fall back",
-  reserve: "go to reserve",
-  build_fob: "raise a redoubt",
-  recruit: "raise men",
-  alert_only: "report only",
+/** The same verbs written as an order you would give. */
+export const ACTION_ORDER: Record<ActionKind, string> = {
+  move: "March on",
+  hold: "Hold",
+  attack_area: "Attack",
+  bombard: "Bombard",
+  charge: "Charge",
+  retreat: "Fall back",
+  reserve: "Stand in reserve",
+  recruit: "Raise",
 };
 
-export const WHERE_TEXT: Record<WhereKind, string> = {
-  event_cell: "the sighting",
-  subject_cell: "the caller",
-  actor_cell: "where it stands",
-  fixed: "a marked place",
+/** Third person, for the line the order reads as. */
+const ACTION_DOES: Record<ActionKind, string> = {
+  move: "marches on",
+  hold: "holds",
+  attack_area: "attacks",
+  bombard: "bombards",
+  charge: "charges",
+  retreat: "falls back",
+  reserve: "stands in reserve",
+  recruit: "raises",
 };
 
-/** Which events can be raised by which kind of subject. */
-export const EVENTS_FOR: Record<"binding" | "structure", EventKind[]> = {
-  binding: ["spotted", "under_fire", "weakened", "arrived", "idle", "destroyed", "timer"],
-  structure: ["threatened", "supply_cut", "supply_restored", "captured", "lost", "destroyed", "timer"],
-};
-
-export const makeRule = (id: string, side: Side, patch: Partial<Rule> = {}): Rule => ({
-  id,
-  side,
-  name: patch.name ?? "Standing order",
-  enabled: patch.enabled ?? true,
-  subject: patch.subject ?? { kind: "any_binding" },
-  event: patch.event ?? "spotted",
-  threshold: patch.threshold ?? 50,
-  actor: patch.actor ?? { kind: "self" },
-  action: patch.action ?? "attack_area",
-  where: patch.where ?? "event_cell",
-  cells: patch.cells ?? [],
-  unitType: patch.unitType ?? "infantry",
-  count: patch.count ?? 8,
-  once: patch.once ?? false,
-  cooldownS: patch.cooldownS ?? 20,
-  cooldownLeft: 0,
-  fired: 0,
-  timerLeft: patch.threshold ?? 30,
-});
-
-/** Does this rule's subject clause name the thing the event happened to? */
-export const subjectMatches = (
-  target: RuleTarget,
-  kind: "binding" | "structure",
-  id: string,
-  name: string,
-) => {
-  switch (target.kind) {
-    case "binding":
-      return kind === "binding" && target.ref === name;
-    case "structure":
-      return kind === "structure" && target.ref === id;
-    case "any_binding":
-      return kind === "binding";
-    case "any_structure":
-      return kind === "structure";
-    default:
-      return false;
-  }
+/** Which watches a thing of this kind can report. */
+export const TRIGGERS_FOR: Record<Watched["kind"], Trigger[]> = {
+  binding: ["under_fire", "spotted", "weakened", "arrived", "idle", "destroyed"],
+  structure: ["threatened", "supply_cut", "supply_restored", "captured", "lost", "destroyed"],
+  chest: ["supply_above"],
 };
 
 /**
- * What the actor clause resolves to, given the event that fired.
+ * Which orders this actor can be given.
  *
- * `self` is the caller — the whole point of the "it can also be the alerting
- * unit" case. `nearest_reserve` is the sugar that makes a book of two rules
- * behave like a real chain of command: whoever is idle and closest answers.
+ * A battery does not charge and a squadron does not bombard, so the dropdown
+ * never offers either. A building can only raise men.
  */
+export const ACTIONS_FOR = (actor: OrderActor["kind"], arm: UnitType | null): ActionKind[] => {
+  if (actor === "structure") return ["recruit"];
+  return ACTIONS.filter((action) => {
+    if (action === "recruit") return false;
+    if (action === "charge") return arm === "cavalry";
+    if (action === "bombard") return arm === "artillery";
+    return true;
+  });
+};
+
+/** Orders that have to be given a piece of ground. */
+export const NEEDS_PLACE = (action: ActionKind) =>
+  action === "move" || action === "attack_area" || action === "bombard"
+  || action === "charge" || action === "hold";
+
+/** Only a watch that sees an enemy can send anyone after "the attacker". */
+export const HAS_ATTACKER = (trigger: Trigger): boolean =>
+  (CONTACT_TRIGGERS as readonly string[]).includes(trigger);
+
+/**
+ * A `weakened` threshold is a percentage of establishment, but 0.45 is just as
+ * natural a way to write forty-five percent, and it used to be taken at face
+ * value: the order read "(0%)" and never fired, because no battalion falls
+ * below half a percent of strength. Anything at or under one is a fraction.
+ */
+export const readThreshold = (trigger: Trigger, value: number) =>
+  trigger === "weakened" && value > 0 && value <= 1 ? value * 100 : value;
+
+export const makeRule = (id: string, side: Side, patch: Partial<Rule> = {}): Rule => {
+  const trigger = patch.trigger ?? "under_fire";
+  return {
+    id,
+    side,
+    enabled: patch.enabled ?? true,
+    watch: patch.watch ?? { kind: "binding", ref: "" },
+    trigger,
+    threshold: readThreshold(trigger, patch.threshold ?? (trigger === "supply_above" ? 800 : 40)),
+    actor: patch.actor ?? { kind: "binding", ref: "" },
+    action: patch.action ?? "attack_area",
+    place: patch.place ?? null,
+    unitType: patch.unitType ?? "infantry",
+    count: patch.count ?? 12,
+    once: patch.once ?? false,
+    cooldownS: patch.cooldownS ?? 20,
+    cooldownLeft: 0,
+    fired: 0,
+  };
+};
+
+/** Is this order held by the thing that just reported? */
+export const watches = (rule: Rule, event: GameEvent) => {
+  if (rule.trigger !== event.event) return false;
+  if (rule.watch.kind !== event.subjectKind) return false;
+  if (rule.watch.kind === "chest") return true;
+  if (rule.watch.kind === "binding") return rule.watch.ref === event.subjectName;
+  return rule.watch.ref === event.subjectId;
+};
+
 export type ActorRef = { kind: "binding" | "structure"; id: string; name: string };
 
 export type RuleWorld = {
+  /** What the order's nouns are called, so a dispatch reads as the order does. */
+  name: Naming;
   bindingByName: (name: string) => ActorRef | null;
   structureById: (id: string) => ActorRef | null;
-  /** Idle friendly formations, nearest first, for `nearest_reserve`. */
-  reservesNear: (cell: Cell, side: Side) => ActorRef[];
   cellOfActor: (ref: ActorRef) => Cell;
-  /** Do the thing. Returns a sentence for the alert feed, or null if it could not. */
+  /** Do the thing. Returns a sentence for the dispatches, or null if it could not. */
   perform: (
     ref: ActorRef,
     action: ActionKind,
@@ -128,100 +151,73 @@ export type RuleWorld = {
     count: number,
   ) => string | null;
   emitAlert: (alert: Omit<Alert, "id">) => void;
-  nextId: (prefix: string) => string;
   clock: number;
 };
 
-const resolveActor = (
-  rule: Rule,
-  event: GameEvent,
-  world: RuleWorld,
-): ActorRef | null => {
-  switch (rule.actor.kind) {
-    case "self":
-      return event.subjectKind === "binding"
-        ? world.bindingByName(event.subjectName)
-        : world.structureById(event.subjectId);
-    case "binding":
-      return rule.actor.ref ? world.bindingByName(rule.actor.ref) : null;
-    case "structure":
-      return rule.actor.ref ? world.structureById(rule.actor.ref) : null;
-    case "nearest_reserve":
-      return world.reservesNear(event.eventCell, rule.side)[0] ?? null;
-    default:
-      return null;
-  }
-};
+const resolveActor = (rule: Rule, world: RuleWorld): ActorRef | null =>
+  rule.actor.kind === "binding"
+    ? world.bindingByName(rule.actor.ref)
+    : world.structureById(rule.actor.ref);
 
-const resolveCells = (rule: Rule, event: GameEvent, actor: ActorRef, world: RuleWorld): Cell[] => {
-  switch (rule.where) {
-    case "event_cell":
-      return [event.eventCell];
-    case "subject_cell":
-      return [event.cell];
-    case "actor_cell":
-      return [world.cellOfActor(actor)];
-    default:
-      return rule.cells.length ? rule.cells : [event.eventCell];
+/** The ground the order aims at, or null if it named something that is gone. */
+const resolvePlace = (rule: Rule, event: GameEvent, actor: ActorRef, world: RuleWorld): Cell | null => {
+  if (!NEEDS_PLACE(rule.action)) return null;
+  const place = rule.place;
+  if (!place) return rule.action === "hold" ? world.cellOfActor(actor) : null;
+  switch (place.kind) {
+    case "attacker": return event.eventCell;
+    case "point": return place.cell;
+    case "binding": {
+      const ref = world.bindingByName(place.ref);
+      return ref ? world.cellOfActor(ref) : null;
+    }
+    default: {
+      const ref = world.structureById(place.ref);
+      return ref ? world.cellOfActor(ref) : null;
+    }
   }
 };
 
 /**
- * Match one batch of events against the book.
+ * Hand one report to the orders held against it.
  *
- * Every event produces an alert whether or not a rule answers it, because a
- * report the player never sees is a report that did not happen. When a rule
- * does answer, the alert carries the rule's name and what it ordered.
+ * Called the instant the report is raised, not on a sweep, so an order is part
+ * of the thing that carries it. Every report reaches the dispatches whether or
+ * not an order answered it, because a report the player never sees is a report
+ * that did not happen.
  */
-export const runRules = (rules: Rule[], events: GameEvent[], world: RuleWorld) => {
-  for (const event of events) {
-    let answered = false;
-    for (const rule of rules) {
-      if (!rule.enabled || rule.side !== event.side) continue;
-      if (rule.event !== event.event) continue;
-      if (rule.cooldownLeft > 0) continue;
-      if (rule.once && rule.fired > 0) continue;
-      if (!subjectMatches(rule.subject, event.subjectKind, event.subjectId, event.subjectName)) continue;
+export const fireOrders = (rules: Rule[], event: GameEvent, world: RuleWorld) => {
+  const say = (rule: Rule | null, response: string | null) => world.emitAlert({
+    atS: world.clock,
+    side: event.side,
+    event: event.event,
+    subject: event.subjectName,
+    subjectId: event.subjectId,
+    cell: event.eventCell,
+    text: event.text,
+    ruleId: rule?.id ?? null,
+    ruleName: rule ? orderText(rule, world.name) : null,
+    response,
+  });
 
-      const actor = resolveActor(rule, event, world);
-      if (!actor) continue;
-      const response = rule.action === "alert_only"
-        ? `${rule.name}: noted.`
-        : world.perform(actor, rule.action, resolveCells(rule, event, actor, world), rule.unitType, rule.count);
-      if (!response) continue;
+  for (const rule of rules) {
+    if (!rule.enabled || rule.side !== event.side) continue;
+    if (rule.cooldownLeft > 0 || (rule.once && rule.fired > 0)) continue;
+    if (!watches(rule, event)) continue;
 
-      rule.fired += 1;
-      rule.cooldownLeft = rule.cooldownS;
-      world.emitAlert({
-        atS: world.clock,
-        side: event.side,
-        event: event.event,
-        subject: event.subjectName,
-        subjectId: event.subjectId,
-        cell: event.eventCell,
-        text: event.text,
-        ruleId: rule.id,
-        ruleName: rule.name,
-        response,
-      });
-      answered = true;
-      break;
-    }
-    if (!answered) {
-      world.emitAlert({
-        atS: world.clock,
-        side: event.side,
-        event: event.event,
-        subject: event.subjectName,
-        subjectId: event.subjectId,
-        cell: event.eventCell,
-        text: event.text,
-        ruleId: null,
-        ruleName: null,
-        response: null,
-      });
-    }
+    const actor = resolveActor(rule, world);
+    if (!actor) continue;
+    const place = resolvePlace(rule, event, actor, world);
+    if (NEEDS_PLACE(rule.action) && !place) continue;
+    const response = world.perform(actor, rule.action, place ? [place] : [], rule.unitType, rule.count);
+    if (!response) continue;
+
+    rule.fired += 1;
+    rule.cooldownLeft = rule.cooldownS;
+    say(rule, response);
+    return;
   }
+  say(null, null);
 };
 
 export const coolRules = (rules: Rule[], dt: number) => {
@@ -230,15 +226,45 @@ export const coolRules = (rules: Rule[], dt: number) => {
   }
 };
 
-/** One readable line for a rule, used by the book, the tooltip and the tools. */
-export const describeRule = (rule: Rule, label: (target: RuleTarget) => string) => {
-  const when = rule.event === "timer"
-    ? `Every ${Math.round(rule.threshold)}s`
-    : `When ${label(rule.subject)} ${EVENT_TEXT[rule.event]}${rule.event === "weakened" ? ` (${Math.round(rule.threshold)}%)` : ""}`;
-  const then = rule.action === "recruit"
-    ? `${label(rule.actor)} raises ${rule.count} ${rule.unitType}`
-    : rule.action === "alert_only"
-      ? `report it`
-      : `${label(rule.actor)} ${ACTION_TEXT[rule.action]} at ${WHERE_TEXT[rule.where]}`;
-  return `${when}, ${then}.`;
+// -- how an order reads ------------------------------------------------------
+
+export type Naming = {
+  watched: (watch: Watched) => string;
+  actor: (actor: OrderActor) => string;
+  place: (place: OrderPlace, trigger: Trigger) => string;
+};
+
+/** What the order tells someone to do. This is the line the book shows. */
+export const orderText = (rule: Rule, name: Naming) => {
+  const who = name.actor(rule.actor);
+  if (rule.action === "recruit") return `${who} raises ${rule.count} ${rule.unitType}`;
+  const does = ACTION_DOES[rule.action];
+  if (!NEEDS_PLACE(rule.action)) return `${who} ${does}`;
+  if (!rule.place) return rule.action === "hold" ? `${who} holds its ground` : `${who} ${does}`;
+  return `${who} ${does} ${name.place(rule.place, rule.trigger)}`;
+};
+
+/** What sets it off. Kept out of the book list and shown in the order card. */
+export const watchText = (rule: Rule, name: Naming) => {
+  const what = name.watched(rule.watch);
+  if (rule.trigger === "supply_above") return `${what} passes ${Math.round(rule.threshold)} crates`;
+  if (rule.trigger === "weakened") return `${what} is cut below ${Math.round(rule.threshold)}% of its strength`;
+  return `${what} ${TRIGGER_TEXT[rule.trigger]}`;
+};
+
+/**
+ * The whole order in one line, order first.
+ *
+ * Used by the order card, the dispatches and the WebMCP tools, so all three
+ * read the same words.
+ */
+export const describeRule = (rule: Rule, name: Naming) => {
+  const sameThing = rule.watch.kind !== "chest" && rule.actor.kind === rule.watch.kind
+    && rule.actor.ref === rule.watch.ref;
+  const when = sameThing
+    ? (rule.trigger === "weakened"
+      ? `it is cut below ${Math.round(rule.threshold)}% of its strength`
+      : `it ${TRIGGER_TEXT[rule.trigger]}`)
+    : watchText(rule, name);
+  return `${orderText(rule, name)} when ${when}.`;
 };

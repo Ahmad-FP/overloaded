@@ -8,7 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "deploy": "npm run build && wrangler pages deploy dist --project-name overloaded",
+    "deploy": "npm run build && wrangler deploy",
     "lint": "oxlint src"
   },
   "dependencies": {

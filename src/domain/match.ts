@@ -1,15 +1,15 @@
 import {
   BASE_COST, BAYONET_SPEED, CAPTURE_TILES, DEFAULT_TIME_S, DEPOT_CAPTURE_S,
-  DEPOT_YIELD, FOB_BUILD_S, FOB_COST, FOB_MIN_SPACING_TILES, FOB_REACH_TILES,
-  FOB_YIELD, GRADE_COST, ARTILLERY_SIEGE_HIT, HP, ID_MEDIUM_TILES, ID_NEAR_TILES,
+  DEPOT_YIELD, WORK_MIN_SPACING_TILES, WORK_REACH_TILES, GRADE_COST,
+  ARTILLERY_SIEGE_HIT, HIGH_GROUND_M, HP, ID_MEDIUM_TILES, ID_NEAR_TILES, isWork,
   LANCE_SPEED, MAIN_YIELD, MELEE_RANGE, NATO_NAMES, RECRUIT_TIME_S, SIEGE_DPS,
-  SIGHT_TILES, SPAN, START_SUPPLY, SUPPLY_INTERVAL_S, TILE_M,
+  SIGHT_TILES, SPAN, START_SUPPLY, SUPPLY_INTERVAL_S, TILE_M, WORKS, WORK_TRADE, type WorkKind,
 } from "./constants";
 import { hasLos } from "./los";
-import { mapById } from "./maps";
+import { DEFAULT_FIELD_AREA, FIELD_SIZES, mapById } from "./maps";
 import { findPath } from "./path";
-import { coolRules, makeRule, runRules, type ActorRef, type RuleWorld } from "./rules";
-import { worldSlots } from "./shapes";
+import { coolRules, fireOrders, makeRule, readThreshold, type ActorRef, type Naming, type RuleWorld } from "./rules";
+import { frontage, worldSlots } from "./shapes";
 import {
   bank, buildControl, incomeOf, routeHome, type ControlField,
 } from "./supply";
@@ -21,7 +21,7 @@ import {
 import type {
   ActionKind, Alert, Binding, Cell, CommandResult, Contact, ContactBand,
   GameEvent, Load, OrderKind, Owner, Phase, Priority, ProductionOrder,
-  Projectile, Quality, Report, ResultKind, Rule, RuleTarget, SequenceStep, Settings,
+  Projectile, Quality, Report, ResultKind, Rule, SequenceStep, Settings, Trigger,
   Shape, Side, StandingOrder, Structure, Unit, UnitType, WorldMap,
 } from "./types";
 
@@ -33,6 +33,13 @@ const other = (side: Side): Side => (side === "player" ? "enemy" : "player");
 
 /** How much of its own dispatch traffic each side keeps. */
 const ALERTS_PER_SIDE = 90;
+
+/** What the enemy that set a watch off is called, given what the watch was. */
+const ATTACKER_TEXT: Partial<Record<Trigger, string>> = {
+  under_fire: "the attacker",
+  spotted: "the enemy it sighted",
+  threatened: "the enemy at its gate",
+};
 
 const defaultOrder = (cell: Cell): StandingOrder => ({
   kind: "hold",
@@ -53,6 +60,12 @@ const GRAVITY = 3.4;
 
 /** Longest reach of a field piece, and the closest it will lay a ball. */
 const ARTILLERY_RANGE = 380;
+/** Men a single round shot can take. A ball ploughs a file, not a square. */
+const BALL_FILE = 4;
+/** Seconds a trooper needs to ride clear and come round again. */
+const MELEE_RECOVER_S = 2.6;
+/** The odds a man ridden down takes the horseman with him. */
+const MELEE_ANSWER = 0.42;
 export const ARTILLERY_MIN_RANGE = 26;
 
 export const unitCost = (type: UnitType, grade: Quality) =>
@@ -60,6 +73,20 @@ export const unitCost = (type: UnitType, grade: Quality) =>
 
 const recruitSeconds = (type: UnitType, grade: Quality, count: number) =>
   RECRUIT_TIME_S[type] * count * (GRADE_COST[grade] ?? 1);
+
+/**
+ * What a shed does for the arm it serves.
+ *
+ * A barracks is 220 crates that only pays for itself in cheaper, faster
+ * infantry -- it has no yield of its own -- and it pays more when it stands on
+ * the ground it wants. Multiplies both the bill and the time, so a work is a
+ * decision about what you intend to raise rather than a flat tax.
+ */
+export const tradeRate = (structure: Structure, type: UnitType) => {
+  if (!isWork(structure.kind)) return 1;
+  if (WORK_TRADE[structure.kind as WorkKind] !== type) return 1;
+  return structure.sited ? 0.65 : 0.78;
+};
 
 /**
  * The whole game.
@@ -96,16 +123,16 @@ export class Match {
   private reports: Report[] = [];
   private supplyAccum = SUPPLY_INTERVAL_S;
   private control: Record<Side, ControlField | null> = { player: null, enemy: null };
-  private pending: GameEvent[] = [];
   private routes = new Map<string, { goal: Cell; path: Cell[] }>();
 
   constructor(settings?: Partial<Settings>) {
     this.settings = {
       timeLimitS: settings?.timeLimitS ?? DEFAULT_TIME_S,
       mapId: settings?.mapId ?? "village",
+      mapArea: settings?.mapArea ?? DEFAULT_FIELD_AREA,
       difficulty: settings?.difficulty ?? 2,
     };
-    this.world = mapById(this.settings.mapId);
+    this.world = mapById(this.settings.mapId, this.settings.mapArea);
   }
 
   id(prefix: string) {
@@ -146,12 +173,39 @@ export class Match {
     return [...this.structures.values()].find((structure) => structure.kind === "main" && structure.side === side);
   }
 
+  /**
+   * Where a formation is, in metres.
+   *
+   * The median of its men, not the mean. This is the single most consequential
+   * line in the movement code: the formation's position is what decides how
+   * far along its route it has got, and with a mean, three stragglers caught
+   * on a wall hold two dozen men who have already reached the next waypoint.
+   * The formation then never advances, its route never progresses, and it
+   * stands there for the rest of the battle -- which is exactly what it did.
+   * A median ignores the stragglers, the body of the formation gets on, and
+   * the men behind catch up.
+   */
+  bindingAt(binding: Binding): { x: number; z: number } {
+    const members = this.bindingUnits(binding);
+    if (!members.length) return { x: 0, z: 0 };
+    const mid = (values: number[]) => {
+      values.sort((a, b) => a - b);
+      const half = values.length >> 1;
+      return values.length % 2
+        ? values[half] as number
+        : ((values[half - 1] as number) + (values[half] as number)) / 2;
+    };
+    return {
+      x: mid(members.map((unit) => unit.x)),
+      z: mid(members.map((unit) => unit.z)),
+    };
+  }
+
   bindingCell(binding: Binding): Cell {
     const members = this.bindingUnits(binding);
     if (!members.length) return { x: 0, y: 0 };
-    const x = members.reduce((sum, unit) => sum + unit.x, 0) / members.length;
-    const z = members.reduce((sum, unit) => sum + unit.z, 0) / members.length;
-    return cellOf(x, z);
+    const at = this.bindingAt(binding);
+    return cellOf(at.x, at.z);
   }
 
   // -- setup ---------------------------------------------------------------
@@ -160,30 +214,40 @@ export class Match {
     if (this.phase !== "boot") return fail("wrong_phase", "Settings can only change before the battle opens.");
     if (patch.timeLimitS !== undefined) this.settings.timeLimitS = Math.max(180, Math.min(3600, Math.round(patch.timeLimitS)));
     if (patch.difficulty !== undefined) this.settings.difficulty = patch.difficulty;
-    if (patch.mapId) {
-      this.settings.mapId = patch.mapId;
-      this.world = mapById(patch.mapId);
+    if (patch.mapArea !== undefined) {
+      const wanted = FIELD_SIZES.find((size) => size.area === patch.mapArea);
+      if (!wanted) return fail("bad_field_size", "Field size must be one of the offered sizes.");
+      this.settings.mapArea = wanted.area;
+    }
+    if (patch.mapId) this.settings.mapId = patch.mapId;
+    if (patch.mapId || patch.mapArea !== undefined) {
+      this.world = mapById(this.settings.mapId, this.settings.mapArea);
     }
     return ok(this.settings);
   }
 
   private addStructure(kind: Structure["kind"], side: Owner, cell: Cell, name: string, build = 1): Structure {
+    const work = isWork(kind) ? WORKS[kind] : null;
+    const sited = isWork(kind) ? this.wellSited(kind, cell) : false;
+    const plain = isWork(kind) ? null : (kind as "main" | "depot");
+    const maxHp = work ? (sited ? work.hp * work.boon : work.hp) : HP[plain!];
     const structure: Structure = {
-      id: this.id(kind === "main" ? "base" : kind === "fob" ? "fob" : "dep"),
+      id: this.id(kind === "main" ? "base" : kind === "depot" ? "dep" : kind),
       kind,
       side,
       name,
       cell,
-      span: SPAN[kind],
-      hp: HP[kind] * build,
-      maxHp: HP[kind],
+      span: work ? work.span : SPAN[plain!],
+      hp: maxHp * build,
+      maxHp,
       build,
-      yield: kind === "main" ? MAIN_YIELD : kind === "fob" ? FOB_YIELD : DEPOT_YIELD,
+      yield: work ? work.yield : plain === "main" ? MAIN_YIELD : DEPOT_YIELD,
       connected: kind === "main",
       route: [],
       capture: 0,
       capturingSide: "neutral",
       rally: this.freeCellNear(cell, kind === "main" ? 3 : 2),
+      sited,
       cutLatch: false,
       threatLatch: false,
       hurtAccum: 0,
@@ -215,7 +279,6 @@ export class Match {
     this.production = [];
     this.projectiles = [];
     this.alerts = [];
-    this.pending = [];
     this.clock = 0;
     this.result = null;
     this.paused = false;
@@ -234,10 +297,22 @@ export class Match {
       if (!main) continue;
       // Drawn up in front of the works and facing the field, not stacked on
       // the gate. Two battalions forward with the horse held between them.
-      const out = side === "player" ? 1 : -1;
-      this.garrison(side, main, "infantry", 24, 2, { x: main.cell.x + out * 3, y: main.cell.y - 4 });
-      this.garrison(side, main, "infantry", 24, 2, { x: main.cell.x + out * 3, y: main.cell.y + 4 });
-      this.garrison(side, main, "cavalry", 10, 2, { x: main.cell.x + out * 2, y: main.cell.y });
+      //
+      // Faced along the line between the two headquarters rather than due
+      // east: the fields are no longer all fought left to right, and on a
+      // field with its axis running north the old fixed offset drew the whole
+      // army up sideways.
+      const foe = this.world.mainCells[side === "player" ? "enemy" : "player"];
+      const span = Math.max(1, Math.hypot(foe.x - main.cell.x, foe.y - main.cell.y));
+      const fx = (foe.x - main.cell.x) / span;
+      const fy = (foe.y - main.cell.y) / span;
+      const at = (ahead: number, along: number): Cell => ({
+        x: Math.round(main.cell.x + fx * ahead - fy * along),
+        y: Math.round(main.cell.y + fy * ahead + fx * along),
+      });
+      this.garrison(side, main, "infantry", 24, 2, at(3, -4));
+      this.garrison(side, main, "infantry", 24, 2, at(3, 4));
+      this.garrison(side, main, "cavalry", 10, 2, at(2, 0));
     }
     this.seedRules();
     this.phase = "battle";
@@ -310,9 +385,12 @@ export class Match {
       establishment: unitIds.length,
       lastStrength: unitIds.length,
       hurtAccum: 0,
+      hurtSaidAt: -99,
       arrived: false,
       weakLatch: false,
       contactLatch: false,
+      stallS: 0,
+      mark: { x: 0, z: 0 },
     };
     this.bindings.set(binding.id, binding);
     unitIds.forEach((id) => {
@@ -322,28 +400,39 @@ export class Match {
     return binding;
   }
 
-  /** Two lines every commander would have written anyway, so the book is never empty. */
+  /**
+   * Two orders every commander would have written anyway.
+   *
+   * Both name something the player can point at -- the first battalion of the
+   * line and the headquarters -- because an order that fires on "any
+   * formation" is an order nobody can predict.
+   */
   private seedRules() {
-    this.rules = [
-      makeRule(this.id("r"), "player", {
-        name: "Answer the guns",
-        subject: { kind: "any_binding" },
-        event: "under_fire",
-        actor: { kind: "self" },
-        action: "attack_area",
-        where: "event_cell",
-        cooldownS: 25,
-      }),
-      makeRule(this.id("r"), "player", {
-        name: "Cover a cut line",
-        subject: { kind: "any_structure" },
-        event: "supply_cut",
-        actor: { kind: "nearest_reserve" },
-        action: "attack_area",
-        where: "subject_cell",
+    const first = [...this.bindings.values()].find((binding) => binding.side === "player");
+    const main = this.mainOf("player");
+    this.rules = [];
+    if (first) {
+      this.rules.push(makeRule(this.id("r"), "player", {
+        watch: { kind: "binding", ref: first.name },
+        trigger: "weakened",
+        threshold: 35,
+        actor: { kind: "binding", ref: first.name },
+        action: "retreat",
+        cooldownS: 45,
+      }));
+    }
+    if (main) {
+      this.rules.push(makeRule(this.id("r"), "player", {
+        watch: { kind: "chest" },
+        trigger: "supply_above",
+        threshold: 1200,
+        actor: { kind: "structure", ref: main.id },
+        action: "recruit",
+        unitType: "infantry",
+        count: 12,
         cooldownS: 30,
-      }),
-    ];
+      }));
+    }
   }
 
   // -- economy -------------------------------------------------------------
@@ -355,10 +444,11 @@ export class Match {
     if (structure.build < 1) return fail("unfinished", `${structure.name} is still being built.`);
     if (!structure.connected) return fail("out_of_supply", `${structure.name} is cut off and cannot raise men.`);
     const n = Math.max(1, Math.min(120, Math.round(count)));
-    const bill = unitCost(type, grade) * n;
+    const rate = tradeRate(structure, type);
+    const bill = Math.round(unitCost(type, grade) * n * rate);
     if (this.supply[side] < bill) return fail("not_enough_supply", `Need ${bill} crates, have ${Math.floor(this.supply[side])}.`);
     this.supply[side] -= bill;
-    const totalS = recruitSeconds(type, grade, n);
+    const totalS = recruitSeconds(type, grade, n) * rate;
     const order: ProductionOrder = {
       id: this.id("q"),
       side,
@@ -375,26 +465,48 @@ export class Match {
   }
 
   /** Every reason a redoubt cannot go here, without building one. */
-  canBuildFob(side: Side, cell: Cell): CommandResult<{ cost: number }> {
-    if (this.phase !== "battle") return fail("wrong_phase", "Building happens during the battle.");
-    if (!inBounds(this.world, cell.x, cell.y)) return fail("out_of_bounds", "That is off the map.");
-    if (!walkable(terrainAt(this.world, cell.x, cell.y))) return fail("blocked", "A redoubt needs open ground.");
-    if (this.supply[side] < FOB_COST) return fail("not_enough_supply", `Need ${FOB_COST} crates, have ${Math.floor(this.supply[side])}.`);
-    const near = this.structuresOf(side).some((structure) => structure.connected && this.tileGap(structure.cell, cell) <= FOB_REACH_TILES);
-    if (!near) return fail("out_of_reach", `A redoubt must be within ${FOB_REACH_TILES} tiles of a base that is in supply.`);
-    const crowded = [...this.structures.values()].some((structure) => this.tileGap(structure.cell, cell) < FOB_MIN_SPACING_TILES);
-    if (crowded) return fail("too_close", `Keep redoubts ${FOB_MIN_SPACING_TILES} tiles apart.`);
-    if (this.control[side]?.blocked[cell.y * this.world.width + cell.x]) return fail("contested", "The enemy holds that ground.");
-    return ok({ cost: FOB_COST });
+  /**
+   * Does this cell touch the ground the work wants?
+   *
+   * Checked over the eight neighbours and the cell itself, so a foundry only
+   * has to back onto woods rather than stand in them.
+   */
+  private wellSited(kind: WorkKind, cell: Cell): boolean {
+    const wants = WORKS[kind].wants;
+    const here = heightAt(this.world, cell.x, cell.y);
+    for (let dy = -1; dy <= 1; dy += 1) {
+      for (let dx = -1; dx <= 1; dx += 1) {
+        const x = cell.x + dx;
+        const y = cell.y + dy;
+        if (!inBounds(this.world, x, y)) continue;
+        if (wants.terrain && terrainAt(this.world, x, y) === wants.terrain) return true;
+      }
+    }
+    return Boolean(wants.highGround && here >= HIGH_GROUND_M);
   }
 
-  buildFob(side: Side, cell: Cell): CommandResult<Structure> {
-    const check = this.canBuildFob(side, cell);
+  canBuild(side: Side, kind: WorkKind, cell: Cell): CommandResult<{ cost: number; sited: boolean }> {
+    const work = WORKS[kind];
+    if (this.phase !== "battle") return fail("wrong_phase", "Building happens during the battle.");
+    if (!inBounds(this.world, cell.x, cell.y)) return fail("out_of_bounds", "That is off the map.");
+    if (!walkable(terrainAt(this.world, cell.x, cell.y))) return fail("blocked", `A ${work.name.toLowerCase()} needs open ground.`);
+    if (this.supply[side] < work.cost) return fail("not_enough_supply", `Need ${work.cost} crates, have ${Math.floor(this.supply[side])}.`);
+    const near = this.structuresOf(side).some((structure) => structure.connected && this.tileGap(structure.cell, cell) <= WORK_REACH_TILES);
+    if (!near) return fail("out_of_reach", `A ${work.name.toLowerCase()} must be within ${WORK_REACH_TILES} tiles of a work that is in supply.`);
+    const crowded = [...this.structures.values()].some((structure) => this.tileGap(structure.cell, cell) < WORK_MIN_SPACING_TILES);
+    if (crowded) return fail("too_close", `Keep works ${WORK_MIN_SPACING_TILES} tiles apart.`);
+    if (this.control[side]?.blocked[cell.y * this.world.width + cell.x]) return fail("contested", "The enemy holds that ground.");
+    return ok({ cost: work.cost, sited: this.wellSited(kind, cell) });
+  }
+
+  build(side: Side, kind: WorkKind, cell: Cell): CommandResult<Structure> {
+    const check = this.canBuild(side, kind, cell);
     if (!check.ok) return check;
-    this.supply[side] -= FOB_COST;
-    const built = this.structuresOf(side).filter((structure) => structure.kind === "fob").length;
-    const structure = this.addStructure("fob", side, cell, `Redoubt ${built + 1}`, 0);
-    structure.hp = HP.fob * 0.15;
+    const work = WORKS[kind];
+    this.supply[side] -= work.cost;
+    const built = this.structuresOf(side).filter((structure) => structure.kind === kind).length;
+    const structure = this.addStructure(kind, side, cell, built ? `${work.name} ${built + 1}` : work.name, 0);
+    structure.hp = structure.maxHp * 0.15;
     return ok(structure);
   }
 
@@ -402,14 +514,40 @@ export class Match {
     return Math.hypot(a.x - b.x, a.y - b.y);
   }
 
+  /**
+   * The war chest reports as it crosses a figure, not on a sweep: an order
+   * written against it goes out on the crate that passes the mark.
+   */
+  private tickChest(side: Side, before: number, after: number) {
+    if (after <= before) return;
+    const main = this.mainOf(side);
+    for (const rule of this.rules) {
+      if (rule.side !== side || !rule.enabled || rule.trigger !== "supply_above") continue;
+      if (rule.threshold <= before || rule.threshold > after) continue;
+      this.emit({
+        side,
+        event: "supply_above",
+        subjectKind: "chest",
+        subjectId: "chest",
+        subjectName: "The war chest",
+        cell: main?.cell ?? { x: 0, y: 0 },
+        eventCell: main?.cell ?? { x: 0, y: 0 },
+        text: `The war chest has passed ${Math.round(rule.threshold)} crates.`,
+      });
+    }
+  }
+
   private tickEconomy(dt: number) {
     for (const side of ["player", "enemy"] as const) {
       this.income[side] = incomeOf(this.structures.values(), side);
-      this.supply[side] = bank(this.supply[side], (this.income[side] / 60) * dt);
+      const before = this.supply[side];
+      this.supply[side] = bank(before, (this.income[side] / 60) * dt);
+      this.tickChest(side, before, this.supply[side]);
     }
     for (const structure of this.structures.values()) {
       if (structure.build >= 1) continue;
-      structure.build = Math.min(1, structure.build + dt / FOB_BUILD_S);
+      const buildS = isWork(structure.kind) ? WORKS[structure.kind].buildS : 22;
+      structure.build = Math.min(1, structure.build + dt / buildS);
       structure.hp = Math.max(structure.hp, structure.maxHp * (0.15 + structure.build * 0.85));
     }
     const done: ProductionOrder[] = [];
@@ -611,13 +749,45 @@ export class Match {
 
   // -- events and the rule book --------------------------------------------
 
+  /**
+   * A report goes straight to the orders written against the thing that raised
+   * it. Nothing is queued and nothing is swept: the order is part of the
+   * formation, and it goes out in the same instant the report does.
+   */
   emit(event: GameEvent) {
-    this.pending.push(event);
+    fireOrders(this.rules, event, this.ruleWorld());
+  }
+
+  /**
+   * What a standing order's nouns are called.
+   *
+   * The book, the order card, the dispatches and the WebMCP tools all read an
+   * order through this, so the player and an agent see the same words for the
+   * same formation.
+   */
+  naming(): Naming {
+    const formation = (ref: string) => this.bindingByName(ref)?.name ?? ref ?? "a formation";
+    const base = (ref: string) => this.structures.get(ref)?.name ?? "a base";
+    return {
+      watched: (watch) => watch.kind === "chest"
+        ? "the war chest"
+        : watch.kind === "binding" ? formation(watch.ref) : base(watch.ref),
+      actor: (actor) => actor.kind === "binding" ? formation(actor.ref) : base(actor.ref),
+      place: (place, trigger) => {
+        switch (place.kind) {
+          case "attacker": return ATTACKER_TEXT[trigger] ?? "the enemy";
+          case "binding": return formation(place.ref);
+          case "structure": return base(place.ref);
+          default: return `the ground at ${place.cell.x},${place.cell.y}`;
+        }
+      },
+    };
   }
 
   private ruleWorld(): RuleWorld {
     const refOfBinding = (binding: Binding): ActorRef => ({ kind: "binding", id: binding.id, name: binding.name });
     return {
+      name: this.naming(),
       bindingByName: (name) => {
         const binding = this.bindingByName(name);
         return binding ? refOfBinding(binding) : null;
@@ -626,13 +796,6 @@ export class Match {
         const structure = this.structures.get(id);
         return structure ? { kind: "structure", id: structure.id, name: structure.name } : null;
       },
-      reservesNear: (cell, side) =>
-        [...this.bindings.values()]
-          .filter((binding) => binding.side === side && this.bindingUnits(binding).length > 0)
-          .filter((binding) => binding.order.kind === "reserve" || binding.order.kind === "hold")
-          .map((binding) => ({ ref: refOfBinding(binding), gap: this.tileGap(this.bindingCell(binding), cell) }))
-          .sort((a, b) => a.gap - b.gap)
-          .map((entry) => entry.ref),
       cellOfActor: (ref) => {
         if (ref.kind === "structure") return this.structures.get(ref.id)?.cell ?? { x: 0, y: 0 };
         const binding = this.bindings.get(ref.id);
@@ -656,7 +819,6 @@ export class Match {
           }
         }
       },
-      nextId: (prefix) => this.id(prefix),
       clock: this.clock,
     };
   }
@@ -669,13 +831,6 @@ export class Match {
     count: number,
   ): string | null {
     const where = cells[0];
-    if (action === "build_fob") {
-      if (!where) return null;
-      const side = ref.kind === "structure" ? this.structures.get(ref.id)?.side : this.bindings.get(ref.id)?.side;
-      if (side !== "player" && side !== "enemy") return null;
-      const built = this.buildFob(side, where);
-      return built.ok ? `${built.data.name} broken ground at ${where.x},${where.y}.` : null;
-    }
     if (action === "recruit") {
       if (ref.kind !== "structure") return null;
       const structure = this.structures.get(ref.id);
@@ -693,13 +848,6 @@ export class Match {
       : `${binding.name} ordered to ${action.replace("_", " ")}.`;
   }
 
-  private drainEvents() {
-    if (!this.pending.length) return;
-    const events = this.pending;
-    this.pending = [];
-    runRules(this.rules, events, this.ruleWorld());
-  }
-
   /** Watch every formation for the things the book can react to. */
   private tickBindingEvents(dt: number) {
     for (const binding of this.bindings.values()) {
@@ -714,8 +862,20 @@ export class Match {
       binding.lastStrength = strength;
       binding.establishment = Math.max(binding.establishment, strength);
 
-      if (binding.hurtAccum >= Math.max(2, binding.establishment * 0.08)) {
+      /**
+       * One casualty report at a time, with the count in it.
+       *
+       * The threshold is two men, which a battalion under close volley loses
+       * several times in a single second -- so the feed filled with four
+       * identical lines a tick and nothing else could be read. Held to one
+       * report every eight seconds, which also lets it say how many are down
+       * instead of that some are.
+       */
+      const badly = Math.max(2, binding.establishment * 0.08);
+      if (binding.hurtAccum >= badly && this.clock - binding.hurtSaidAt >= 8) {
+        const lost = Math.round(binding.hurtAccum);
         binding.hurtAccum = 0;
+        binding.hurtSaidAt = this.clock;
         const foe = this.nearestVisibleFoe(binding);
         this.emit({
           side: binding.side,
@@ -725,7 +885,7 @@ export class Match {
           subjectName: binding.name,
           cell,
           eventCell: foe ?? cell,
-          text: `${binding.name} is taking casualties.`,
+          text: `${binding.name} has ${lost} ${lost === 1 ? "man" : "men"} down.`,
         });
       }
 
@@ -746,10 +906,21 @@ export class Match {
       }
       if (!weak) binding.weakLatch = false;
 
+      /**
+       * Arrival is reported once per order, not once per tile.
+       *
+       * The latch used to be cleared the moment the formation's centre drifted
+       * off the goal cell -- which it does constantly, because that centre is
+       * the mean of two dozen men shuffling in place. So a battalion standing
+       * on its objective filed the same dispatch every few seconds and the
+       * feed became nothing else. It is cleared when a new order is given
+       * instead, which is the only time arriving is news again.
+       */
       const goal = binding.order.cells[0];
-      const atGoal = Boolean(goal && goal.x === cell.x && goal.y === cell.y);
-      if (atGoal && !binding.arrived) {
+      if (goal && !binding.arrived && goal.x === cell.x && goal.y === cell.y) {
         binding.arrived = true;
+        const post = [...this.structures.values()]
+          .find((s) => s.cell.x === goal.x && s.cell.y === goal.y);
         this.emit({
           side: binding.side,
           event: "arrived",
@@ -758,10 +929,11 @@ export class Match {
           subjectName: binding.name,
           cell,
           eventCell: cell,
-          text: `${binding.name} has reached ${goal?.x},${goal?.y}.`,
+          text: post
+            ? `${binding.name} is in position at ${post.name}.`
+            : `${binding.name} has reached its ground at ${goal.x},${goal.y}.`,
         });
       }
-      if (!atGoal) binding.arrived = false;
 
       // Contact is a rising edge with its own latch. It used to share the
       // arrival latch and fire only on a "hold" order, which meant a column on
@@ -784,29 +956,18 @@ export class Match {
       if (!foe) binding.contactLatch = false;
     }
     coolRules(this.rules, dt);
-    for (const rule of this.rules) {
-      if (rule.event !== "timer" || !rule.enabled) continue;
-      rule.timerLeft -= dt;
-      if (rule.timerLeft > 0) continue;
-      rule.timerLeft = Math.max(5, rule.threshold);
-      const main = this.mainOf(rule.side);
-      this.emit({
-        side: rule.side,
-        event: "timer",
-        subjectKind: "structure",
-        subjectId: main?.id ?? "",
-        subjectName: main?.name ?? "Headquarters",
-        cell: main?.cell ?? { x: 0, y: 0 },
-        eventCell: main?.cell ?? { x: 0, y: 0 },
-        text: `Standing timer: ${rule.name}.`,
-      });
-    }
   }
 
+  /**
+   * The strength a formation reports itself cut down at.
+   *
+   * Whatever its own order says, so a battalion told to break off at a third
+   * reports at a third and one told nothing reports at the usual mark.
+   */
   private weakThreshold(binding: Binding) {
     const rule = this.rules.find((item) =>
-      item.enabled && item.event === "weakened" && item.side === binding.side &&
-      (item.subject.kind === "any_binding" || (item.subject.kind === "binding" && item.subject.ref === binding.name)));
+      item.enabled && item.trigger === "weakened" && item.side === binding.side
+      && item.watch.kind === "binding" && item.watch.ref === binding.name);
     return rule?.threshold ?? 45;
   }
 
@@ -839,7 +1000,7 @@ export class Match {
     const rule = this.rules.find((item) => item.id === id);
     if (!rule) return fail("rule_not_found", "No rule with that id.");
     Object.assign(rule, patch, { id: rule.id, side: rule.side });
-    if (patch.event === "timer" || patch.threshold !== undefined) rule.timerLeft = Math.max(5, rule.threshold);
+    rule.threshold = readThreshold(rule.trigger, rule.threshold);
     return ok(rule);
   }
 
@@ -1008,6 +1169,7 @@ export class Match {
     this.advanceSequences(dt);
     this.moveBindings(dt);
     this.separateBodies();
+    this.freeTrapped(dt);
     this.fireTick(dt);
     this.stepProjectiles(dt);
     this.meleeTick();
@@ -1015,7 +1177,6 @@ export class Match {
     this.tickSiege(dt);
     this.pruneBindings();
     this.tickBindingEvents(dt);
-    this.drainEvents();
     this.evaluateResult();
   }
 
@@ -1048,10 +1209,30 @@ export class Match {
       if (!members.length) continue;
       const moving = binding.order.kind === "move" || binding.order.kind === "retreat"
         || binding.order.kind === "attack_area" || binding.order.kind === "charge";
-      let origin = {
-        x: members.reduce((sum, unit) => sum + unit.x, 0) / members.length,
-        z: members.reduce((sum, unit) => sum + unit.z, 0) / members.length,
-      };
+      let origin = this.bindingAt(binding);
+      let marching = binding.shape;
+      /**
+       * The stall watch.
+       *
+       * Ground and buildings make pockets a formation can wedge itself into,
+       * and a wedged formation is the worst thing this game does: it looks
+       * broken, because it is. So the distance made good is watched, and a
+       * formation that has stopped making any is first narrowed to column and
+       * then, if that is not enough, told to file through the gap -- every man
+       * for the same point, dressing restored on the far side. That is what
+       * troops do at a bridge, and it always clears.
+       */
+      if (moving) {
+        const drift = Math.hypot(origin.x - binding.mark.x, origin.z - binding.mark.z);
+        if (drift > 5) {
+          binding.mark = { x: origin.x, z: origin.z };
+          binding.stallS = 0;
+        } else {
+          binding.stallS += dt;
+        }
+      } else if (binding.stallS) {
+        binding.stallS = 0;
+      }
       if (moving && binding.order.cells[0]) {
         const goal = binding.order.cells[0];
         const here = cellOf(origin.x, origin.z);
@@ -1065,18 +1246,62 @@ export class Match {
           const next = cellCenter(step);
           binding.facing = Math.atan2(next.x - origin.x, next.z - origin.z);
           origin = next;
+          marching = binding.stallS > 4 ? "column" : this.defile(binding, members.length, here, step);
         }
       }
       if (binding.order.kind === "charge") {
         const prey = this.pickTarget(members[0]!, binding, 220);
         if (prey) origin = { x: prey.x, z: prey.z };
       }
-      const slots = worldSlots(origin, binding.shape, members.length, binding.spacing, binding.facing);
+      if (moving && binding.stallS > 9) {
+        // File through: three abreast at most, everyone for the same gap.
+        const across = Math.cos(binding.facing);
+        const along = -Math.sin(binding.facing);
+        members.forEach((unit, index) => {
+          const lane = ((index % 3) - 1) * binding.spacing;
+          this.stepUnit(unit, origin.x + across * lane, origin.z + along * lane, dt, binding);
+        });
+        continue;
+      }
+      const slots = worldSlots(origin, marching, members.length, binding.spacing, binding.facing);
       members.forEach((unit, index) => {
         const slot = slots[index] ?? origin;
         this.stepUnit(unit, slot.x, slot.z, dt, binding);
       });
     }
+  }
+
+  /**
+   * The shape a formation marches in, which is not always the shape it fights
+   * in.
+   *
+   * A battalion in line is a hundred metres of frontage and will not go
+   * through a ford, a bridge, or a village street. Real ones formed column for
+   * the defile and shook back out into line beyond it, and so does this: the
+   * player's chosen shape is untouched, only the ranks it walks in change.
+   */
+  private defile(binding: Binding, count: number, from: Cell, to: Cell): Shape {
+    if (binding.shape === "column") return "column";
+    const wanted = frontage(binding.shape, count, binding.spacing) / TILE_M;
+    if (wanted <= 1.5) return binding.shape;
+    const nx = -Math.sign(to.y - from.y);
+    const ny = Math.sign(to.x - from.x);
+    if (!nx && !ny) return binding.shape;
+    // The formation is centred on its line of march, so what matters is the
+    // room on *each* flank, not the total. Summing the two hands passed a gap
+    // with a river down one side of it and jammed half the battalion in it.
+    const half = wanted / 2;
+    for (const hand of [1, -1]) {
+      let clear = 0;
+      for (let out = 1; out <= Math.ceil(half); out += 1) {
+        const x = to.x + nx * out * hand;
+        const y = to.y + ny * out * hand;
+        if (!inBounds(this.world, x, y) || !walkable(terrainAt(this.world, x, y))) break;
+        clear += 1;
+      }
+      if (clear < half) return "column";
+    }
+    return binding.shape;
   }
 
   /**
@@ -1116,17 +1341,38 @@ export class Match {
       unit.x = tx;
       unit.z = tz;
     } else {
+      /**
+       * Walk the step, and if the ground will not take it, walk what part of
+       * it the ground will.
+       *
+       * This used to drive straight at the slot and, on landing in a river,
+       * shove the man back the way he came. A rank whose slots lie across a
+       * stream then oscillates on the bank for the whole battle -- and because
+       * a formation's position is the mean of its men, the formation itself
+       * never advances a metre. Sliding along the obstacle instead lets a
+       * battalion feel its way round a bank to the ford.
+       */
       const step = Math.min(dist, max * dt);
-      unit.x += (dx / dist) * step;
-      unit.z += (dz / dist) * step;
-      unit.speed = max;
+      const ax = (dx / dist) * step;
+      const az = (dz / dist) * step;
+      const free = (x: number, z: number) => {
+        const at = cellOf(x, z);
+        return walkable(terrainAt(this.world, at.x, at.y));
+      };
+      if (free(unit.x + ax, unit.z + az)) {
+        unit.x += ax;
+        unit.z += az;
+        unit.speed = max;
+      } else if (free(unit.x + ax, unit.z)) {
+        unit.x += ax;
+        unit.speed = max * 0.6;
+      } else if (free(unit.x, unit.z + az)) {
+        unit.z += az;
+        unit.speed = max * 0.6;
+      } else {
+        unit.speed = 0;
+      }
       unit.heading = Math.atan2(dx, dz);
-    }
-    const cell = cellOf(unit.x, unit.z);
-    if (!walkable(terrainAt(this.world, cell.x, cell.y))) {
-      unit.x -= Math.sin(unit.heading) * max * dt * 2;
-      unit.z -= Math.cos(unit.heading) * max * dt * 2;
-      unit.speed *= 0.2;
     }
     unit.y = heightAt(this.world, unit.x, unit.z) + (unit.type === "artillery" ? 0.7 : 0.95);
     if (limber) unit.reload = Math.max(unit.reload, 0.4);
@@ -1144,14 +1390,63 @@ export class Match {
         const min = a.type === "artillery" || b.type === "artillery" ? 2.1 : 1.05;
         if (dist > 0 && dist < min) {
           const push = (min - dist) * 0.5;
-          a.x -= (dx / dist) * push;
-          a.z -= (dz / dist) * push;
-          b.x += (dx / dist) * push;
-          b.z += (dz / dist) * push;
+          // Shove them apart, but not through a wall. This pass had no notion
+          // of terrain, so a crowd at a village corner squeezed men into the
+          // masonry, where nothing could reach their slot and the formation
+          // they belonged to stopped for good.
+          this.shove(a, -(dx / dist) * push, -(dz / dist) * push);
+          this.shove(b, (dx / dist) * push, (dz / dist) * push);
           a.speed *= 0.72;
           b.speed *= 0.72;
         }
       }
+    }
+  }
+
+  /** Move a body by a nudge, refusing any part of it that ends in a wall. */
+  private shove(unit: Unit, dx: number, dz: number) {
+    const clear = (x: number, z: number) => {
+      const at = cellOf(x, z);
+      return walkable(terrainAt(this.world, at.x, at.y));
+    };
+    if (clear(unit.x + dx, unit.z + dz)) {
+      unit.x += dx;
+      unit.z += dz;
+      return;
+    }
+    if (clear(unit.x + dx, unit.z)) unit.x += dx;
+    else if (clear(unit.x, unit.z + dz)) unit.z += dz;
+  }
+
+  /**
+   * Get anyone standing in a wall out of it.
+   *
+   * Belt and braces for the separation pass: a man on unwalkable ground can
+   * never reach his slot, and because a formation's position is the mean of
+   * its men, one man in a wall drags the whole formation to a halt. Whatever
+   * put him there, he walks to the nearest ground that will have him.
+   */
+  freeTrapped(dt: number) {
+    for (const unit of this.living()) {
+      const at = cellOf(unit.x, unit.z);
+      if (walkable(terrainAt(this.world, at.x, at.y))) continue;
+      let best: { x: number; z: number; gap: number } | null = null;
+      for (let dy = -2; dy <= 2; dy += 1) {
+        for (let dx = -2; dx <= 2; dx += 1) {
+          if (!dx && !dy) continue;
+          const x = at.x + dx;
+          const y = at.y + dy;
+          if (!inBounds(this.world, x, y) || !walkable(terrainAt(this.world, x, y))) continue;
+          const to = cellCenter({ x, y });
+          const gap = Math.hypot(to.x - unit.x, to.z - unit.z);
+          if (!best || gap < best.gap) best = { x: to.x, z: to.z, gap };
+        }
+      }
+      if (!best) continue;
+      const step = Math.min(best.gap, baseSpeed(unit.type) * dt);
+      unit.x += ((best.x - unit.x) / best.gap) * step;
+      unit.z += ((best.z - unit.z) / best.gap) * step;
+      unit.y = heightAt(this.world, unit.x, unit.z) + (unit.type === "artillery" ? 0.7 : 0.95);
     }
   }
 
@@ -1339,28 +1634,57 @@ export class Match {
    * advance into suicide. Lethality now falls away sharply from the point of
    * impact, so a well-served battery bleeds a column instead of deleting it.
    */
+  /**
+   * Where a round shot lands.
+   *
+   * It ploughs a lane through the ranks; it does not annihilate a disc. Rolling
+   * the odds against every man inside the blast did exactly that -- a single
+   * ball on a close-packed battalion took fifty men, so four guns wiped a
+   * hundred-and-fourteen-man column off the field in a minute without losing a
+   * gunner. The shot is capped at what a ball can actually do to a file, and
+   * takes the nearest men first.
+   */
   blast(x: number, z: number, radius: number, from?: string) {
-    for (const unit of this.living()) {
-      if (unit.id === from) continue;
-      const gap = Math.hypot(unit.x - x, unit.z - z);
-      if (gap > radius) continue;
-      if (Math.random() < (1 - gap / radius) ** 1.8) this.kill(unit);
+    const caught = this.living()
+      .filter((unit) => unit.id !== from && Math.hypot(unit.x - x, unit.z - z) <= radius)
+      .map((unit) => ({ unit, gap: Math.hypot(unit.x - x, unit.z - z) }))
+      .sort((a, b) => a.gap - b.gap);
+    let down = 0;
+    for (const { unit, gap } of caught) {
+      if (down >= BALL_FILE) break;
+      if (Math.random() >= (1 - gap / radius) ** 1.8) continue;
+      this.kill(unit);
+      down += 1;
     }
   }
 
+  /**
+   * The shock of a charge.
+   *
+   * A charge used to be a lawnmower: every trooper cut down every enemy within
+   * reach, on every one of the twenty ticks a second, for nothing. Ten horsemen
+   * riding through a column erased it and rode out untouched, which is how a
+   * hundred and fourteen men could be lost to sixty without the enemy losing
+   * one. A charge now costs what a charge costs -- one man ridden down, then
+   * the trooper has to get clear and come round again, and formed infantry
+   * takes some of them with it.
+   */
   meleeTick() {
     const bodies = this.living();
     for (const unit of bodies) {
-      if (unit.type === "artillery") continue;
+      if (unit.type === "artillery" || unit.reload > 0) continue;
       const binding = unit.bindingId ? this.bindings.get(unit.bindingId) : undefined;
       if (binding?.order.kind !== "charge") continue;
+      const need = unit.type === "cavalry" ? LANCE_SPEED : BAYONET_SPEED;
+      if (unit.speed < need) continue;
       for (const foe of bodies) {
         if (foe.side === unit.side || !foe.alive) continue;
         if (Math.hypot(foe.x - unit.x, foe.z - unit.z) > MELEE_RANGE) continue;
-        const need = unit.type === "cavalry" ? LANCE_SPEED : BAYONET_SPEED;
-        if (unit.speed < need) continue;
         this.kill(foe);
         this.melee += 1;
+        unit.reload = MELEE_RECOVER_S;
+        if (foe.type !== "artillery" && Math.random() < MELEE_ANSWER) this.kill(unit);
+        break;
       }
     }
   }
@@ -1409,4 +1733,4 @@ export type OrderPatch = {
   sequence?: SequenceStep[];
 };
 
-export type { Rule, RuleTarget };
+export type { Rule };

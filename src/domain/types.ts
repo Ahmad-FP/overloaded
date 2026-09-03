@@ -1,6 +1,6 @@
 import type {
-  ACTIONS, EVENTS, LOADS, MAP_IDS, ORDERS, PRIORITIES, SHAPES, TARGET_KINDS,
-  TERRAIN, UNIT_TYPES, WHERE,
+  ACTIONS, LOADS, MAP_IDS, ORDERS, PRIORITIES, SHAPES, TRIGGERS,
+  TERRAIN, UNIT_TYPES,
 } from "./constants";
 
 export type Side = "player" | "enemy";
@@ -17,16 +17,16 @@ export type Quality = 1 | 2 | 3;
 export type ResultKind = "win" | "lose" | "draw" | null;
 export type ContactBand = "unknown" | "class" | "near";
 
-export type EventKind = (typeof EVENTS)[number];
+export type Trigger = (typeof TRIGGERS)[number];
 export type ActionKind = (typeof ACTIONS)[number];
-export type WhereKind = (typeof WHERE)[number];
-export type TargetKind = (typeof TARGET_KINDS)[number];
 
 export type Cell = { x: number; y: number };
 
 export type Settings = {
   timeLimitS: number;
   mapId: MapId;
+  /** Field size as a multiple of the design grid: see FIELD_SIZES. */
+  mapArea: number;
   difficulty: 1 | 2 | 3;
 };
 
@@ -68,9 +68,15 @@ export type Binding = {
   /** Latched so `weakened` and `under_fire` fire on the edge, not every tick. */
   lastStrength: number;
   hurtAccum: number;
+  /** Match clock when this formation last reported casualties. */
+  hurtSaidAt: number;
   arrived: boolean;
   weakLatch: boolean;
   contactLatch: boolean;
+  /** Seconds this formation has been on the march without making ground. */
+  stallS: number;
+  /** Where it was when the stall watch last saw it move. */
+  mark: { x: number; z: number };
 };
 
 export type Unit = {
@@ -117,7 +123,7 @@ export type Projectile = {
   blast: number;
 };
 
-export type StructureKind = "main" | "fob" | "depot";
+export type StructureKind = "main" | "depot" | "fort" | "barracks" | "stables" | "foundry" | "watchtower";
 
 /**
  * A place on the map that holds ground.
@@ -146,6 +152,8 @@ export type Structure = {
   capture: number;
   capturingSide: Owner;
   rally: Cell;
+  /** Whether this work sits on the ground it wants, and what that pays. */
+  sited: boolean;
   /** Latches so supply and threat events fire on the edge. */
   cutLatch: boolean;
   threatLatch: boolean;
@@ -164,42 +172,61 @@ export type ProductionOrder = {
   bindingName: string;
 };
 
-export type RuleTarget = { kind: TargetKind; ref?: string };
+/**
+ * The three things a standing order can name.
+ *
+ * Every one of them is a specific thing on the field: a formation by name, a
+ * building by id, the war chest, or a marked spot of ground. Nothing here is a
+ * wildcard, so an order can never fire on a formation the player did not mean.
+ */
+export type Watched =
+  | { kind: "binding"; ref: string }
+  | { kind: "structure"; ref: string }
+  | { kind: "chest" };
+
+export type OrderActor =
+  | { kind: "binding"; ref: string }
+  | { kind: "structure"; ref: string };
+
+/** The ground an order aims at. `attacker` is the enemy that set the watch off. */
+export type OrderPlace =
+  | { kind: "attacker" }
+  | { kind: "binding"; ref: string }
+  | { kind: "structure"; ref: string }
+  | { kind: "point"; cell: Cell };
 
 /**
- * One line of the standing-orders book.
+ * One standing order.
  *
- * WHEN <event> happens to <subject>, <actor> performs <action> at <where>.
- * The subject and the actor may be the same thing, which is how a formation
- * reacts to its own trouble.
+ * Written to one formation or one building, set off by one named thing, and
+ * carried out on ground the order names. It is held by the thing it watches:
+ * the moment that thing reports, the order goes out.
  */
 export type Rule = {
   id: string;
   side: Side;
-  name: string;
   enabled: boolean;
-  subject: RuleTarget;
-  event: EventKind;
+  watch: Watched;
+  trigger: Trigger;
+  /** Strength percentage for `weakened`, crates for `supply_above`. */
   threshold: number;
-  actor: RuleTarget;
+  actor: OrderActor;
   action: ActionKind;
-  where: WhereKind;
-  cells: Cell[];
-  /** Payload for `recruit` and `build_fob`. */
+  place: OrderPlace | null;
+  /** Payload for `recruit`. */
   unitType: UnitType;
   count: number;
   once: boolean;
   cooldownS: number;
   cooldownLeft: number;
   fired: number;
-  timerLeft: number;
 };
 
 export type Alert = {
   id: string;
   atS: number;
   side: Side;
-  event: EventKind;
+  event: Trigger;
   subject: string;
   subjectId: string;
   cell: Cell;
@@ -211,8 +238,8 @@ export type Alert = {
 
 export type GameEvent = {
   side: Side;
-  event: EventKind;
-  subjectKind: "binding" | "structure";
+  event: Trigger;
+  subjectKind: "binding" | "structure" | "chest";
   subjectId: string;
   subjectName: string;
   cell: Cell;
@@ -232,7 +259,6 @@ export type Contact = {
 export type WorldMap = {
   id: MapId;
   name: string;
-  job: string;
   width: number;
   height: number;
   tiles: Terrain[];
@@ -240,6 +266,8 @@ export type WorldMap = {
   playerZone: { x0: number; x1: number; y0: number; y1: number };
   enemyZone: { x0: number; x1: number; y0: number; y1: number };
   features: Record<string, Cell[]>;
+  /** How much ground this build covers, as a multiple of the design grid. */
+  area: number;
   /** Where the two main bases stand and where the neutral depots sit. */
   mainCells: Record<Side, Cell>;
   depotCells: Cell[];

@@ -318,6 +318,100 @@ const depot = (): Kit => {
   return { team, body };
 };
 
+/** Barracks: two long huts on a beaten square, with the colours on a pole. */
+const barracks = (): Kit => {
+  const team = weld([
+    place(box(2.4, 1.5, 0.12, COAT_MASK), 1.2, 8.5, 0),
+  ]);
+  const hut = (z: number) => [
+    place(box(9.4, 2.6, 3.4, 0xd8cdb2), 0, 1.3, z),
+    place(box(9.8, 0.38, 2.5, 0x7d4a33), 0, 3.02, z - 0.94, 0.66),
+    place(box(9.8, 0.38, 2.5, 0x7d4a33), 0, 3.02, z + 0.94, -0.66),
+    place(box(9.8, 0.26, 0.34, 0x653a28), 0, 3.72, z),
+    place(box(0.62, 1.4, 0.62, 0xb5a58c), 3.4, 3.9, z),
+    place(box(0.9, 1.6, 0.12, 0x5f4a32), -2.6, 0.8, z + 1.76),
+  ];
+  const body = weld([
+    place(box(12.4, 0.3, 11.4, 0x9a8b69), 0, 0.15, 0),
+    ...hut(-3.3),
+    ...hut(3.3),
+    // Arms stacked on the parade square, so the yard is not empty ground.
+    place(cyl(0.02, 0.9, 2.2, 4, IRON), -4.4, 1.1, 0),
+    place(cyl(0.16, 0.16, 6.8, 6, 0x7a6a52), 1.2, 5.4, 0),
+    place(box(0.22, 0.7, 5.2, 0x6a5233), -5.8, 1.0, 0),
+  ]);
+  return { team, body };
+};
+
+/** Stables: an open-fronted shed inside a paddock, with a hayrick. */
+const stables = (): Kit => {
+  const team = weld([
+    place(box(1.9, 1.2, 0.12, COAT_MASK), 0.95, 7.2, 0),
+  ]);
+  const body = weld([
+    place(cyl(6.5, 6.8, 0.24, 9, 0x9d8f6d), 0, 0.12, 0),
+    ...rampart(9, 5.9, 1.15, 0.24, 0x6a5233, 0x51402a, 0.2),
+    // Three walls and a single pitch, open to the paddock.
+    place(box(7.4, 2.4, 0.34, 0xcdbf9f), 0, 1.2, -3.5),
+    place(box(0.34, 2.4, 3.2, 0xcdbf9f), -3.53, 1.2, -2.0),
+    place(box(0.34, 2.4, 3.2, 0xcdbf9f), 3.53, 1.2, -2.0),
+    place(box(7.8, 0.36, 4.0, 0x7d4a33), 0, 2.72, -2.0, 0.22),
+    place(cyl(0.12, 1.7, 2.0, 6, 0xc9a24a), 3.3, 1.0, 3.0),
+    place(cone(1.75, 1.3, 6, 0xb8912f), 3.3, 2.6, 3.0),
+    place(box(1.9, 0.7, 1.1, 0x6a5233), -3.2, 0.35, 2.6),
+    place(cyl(0.16, 0.16, 6.0, 6, 0x7a6a52), 0.95, 4.2, 0),
+  ]);
+  return { team, body };
+};
+
+/** Foundry: a brick forge under a tall chimney, iron stacked outside. */
+const foundry = (): Kit => {
+  const team = weld([
+    place(box(1.9, 1.2, 0.12, COAT_MASK), 0.95, 7.0, 0),
+  ]);
+  const body = weld([
+    place(box(11.4, 0.3, 9.8, 0x8f8266), 0, 0.15, 0),
+    place(box(8.2, 3.6, 6.4, 0x8d5a42), 0, 1.8, 0),
+    place(box(8.7, 0.44, 7.2, 0x4a4a50), 0, 3.92, 0),
+    place(cyl(1.15, 1.55, 9.2, 6, 0x7e4f3a), -2.7, 4.6, -1.2),
+    place(cyl(1.4, 1.4, 0.62, 6, 0x5c3a2b), -2.7, 9.4, -1.2),
+    // The forge mouth: the one warm colour on the board that is not a flag.
+    place(box(2.2, 2.2, 0.2, 0xd98b3a), 2.9, 1.5, 3.25),
+    place(cyl(0.3, 2.1, 1.7, 6, 0x3f3a35), 4.6, 0.85, -3.6),
+    place(box(3.2, 0.5, 0.7, IRON), -3.7, 0.45, 3.7),
+    place(box(3.2, 0.5, 0.7, IRON), -3.7, 0.98, 3.7),
+    place(cyl(0.16, 0.16, 6.0, 6, 0x7a6a52), 0.95, 4.0, 4.4),
+  ]);
+  return { team, body };
+};
+
+/** Watchtower: four braced legs and a railed platform, read from far off. */
+const watchtower = (): Kit => {
+  const frame: BufferGeometry[] = [];
+  for (let i = 0; i < 4; i += 1) {
+    const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+    frame.push(place(box(0.55, 10.4, 0.55, 0x7a5c3a), Math.cos(a) * 2.5, 5.2, Math.sin(a) * 2.5));
+  }
+  // Bracing, or the legs read as four unconnected sticks from above.
+  for (let i = 0; i < 4; i += 1) {
+    frame.push(place(box(6.4, 0.3, 0.3, 0x6a4f31), 0, 3.2 + (i % 2) * 3.6, 0, 0, (i >> 1) * Math.PI / 2, 0.66));
+  }
+  const team = weld([
+    place(box(1.9, 1.2, 0.12, COAT_MASK), 0.95, 15.3, 0),
+  ]);
+  const body = weld([
+    place(cyl(4.4, 4.8, 0.3, 6, 0x9a8b69), 0, 0.15, 0),
+    ...frame,
+    place(box(7.0, 0.42, 7.0, 0x9a7b4e), 0, 10.6, 0),
+    ...rampart(4, 3.3, 1.25, 0.32, 0xb59a6b, 0x7f6a48, Math.PI / 4),
+    place(box(5.6, 0.36, 3.6, 0x6d4433), 0, 12.4, -1.0, 0.5),
+    place(box(5.6, 0.36, 3.6, 0x6d4433), 0, 12.4, 1.0, -0.5),
+    place(ball(0.45, 0xf0cf7a), 0, 11.9, 2.1),
+    place(cyl(0.16, 0.16, 6.2, 6, 0x7a6a52), 0.95, 13.4, 0),
+  ]);
+  return { team, body };
+};
+
 let built: Record<string, Kit> | null = null;
 
 export const kits = () => {
@@ -329,7 +423,11 @@ export const kits = () => {
     tree: tree(),
     house: house(),
     main: fort(),
-    fob: redoubt(),
+    fort: redoubt(),
+    barracks: barracks(),
+    stables: stables(),
+    foundry: foundry(),
+    watchtower: watchtower(),
     depot: depot(),
   };
   return built;

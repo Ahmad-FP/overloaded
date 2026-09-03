@@ -5,16 +5,18 @@ import "./style.css";
 import { audio } from "./audio/sound";
 import { TILE_M } from "./domain/constants";
 import {
-  addRule, buildFob, issue, recruit, removeRule, startBattle, tickMatch, updateRule,
+  addRule, buildWork, issue, recruit, removeRule, startBattle, tickMatch, updateRule,
 } from "./domain/commands";
 import { Match } from "./domain/match";
-import type { Alert, Cell, EventKind, MapId, OrderKind, Rule } from "./domain/types";
+import type { Alert, Cell, MapId, OrderKind, Rule, Trigger } from "./domain/types";
 import { Board } from "./render/board";
 import { Hero } from "./render/hero";
 import { Coach } from "./ui/coach";
 import { ORDER_BY_CODE } from "./ui/keys";
 import { Hud } from "./ui/hud";
+import { Minimap } from "./ui/minimap";
 import { Overlay } from "./ui/overlay";
+import { Roster } from "./ui/roster";
 import { Shell } from "./ui/shell";
 import { registerWebMCPTools } from "./webmcp/register";
 
@@ -31,7 +33,7 @@ const view = new Overlay(host, board);
 const NEEDS_CELL: ReadonlySet<OrderKind> = new Set<OrderKind>(["move", "attack_area", "bombard", "charge", "retreat"]);
 
 /** Which alert deserves which horn. */
-const CUE_OF: Partial<Record<EventKind, Parameters<typeof audio.play>[0]>> = {
+const CUE_OF: Partial<Record<Trigger, Parameters<typeof audio.play>[0]>> = {
   spotted: "spotted",
   under_fire: "under_fire",
   weakened: "weakened",
@@ -44,8 +46,9 @@ const CUE_OF: Partial<Record<EventKind, Parameters<typeof audio.play>[0]>> = {
 };
 
 let pendingOrder: OrderKind | null = null;
+/** An order waiting for the player to mark the ground it aims at. */
+let markingFor: string | null = null;
 let speed = 1;
-let webmcp = { registered: false, count: 0 };
 
 const selected = () => [...view.selection].filter((name) => match.bindingByName(name));
 
@@ -80,8 +83,8 @@ const hud = new Hud(host, {
     report(recruit(match, structureId, type, count, grade), "recruit");
     coach.mark("recruit");
   },
-  beginBuild: () => {
-    view.placing = !view.placing;
+  beginBuild: (kind) => {
+    view.placing = view.placing === kind ? null : kind;
     hud.setBuilding(view.placing);
     audio.play(view.placing ? "open" : "close");
   },
@@ -100,6 +103,7 @@ const hud = new Hud(host, {
   setHoldFire: (holdFire) => { for (const name of selected()) issue(match, name, { holdFire }); audio.play("click"); },
   setLoad: (load) => { for (const name of selected()) issue(match, name, { load }); audio.play("click"); },
   focus: (cell) => { board.centreOn(cell); audio.play("click"); },
+  pickWork: (id) => { view.work = id; if (id) view.selection.clear(); },
   togglePause: () => { match.setPaused(!match.paused); audio.play(match.paused ? "close" : "open"); },
   setSpeed: (value) => { speed = value; audio.play("click"); },
   toggleMute: () => {
@@ -108,43 +112,59 @@ const hud = new Hud(host, {
     hud.setMuted(muted);
     if (!muted) audio.play("click");
   },
-  addRule: () => {
-    const result = addRule(match, {});
+  addRule: (seed) => {
+    // A new order is written to whatever the player has in hand, so the card
+    // opens already pointed at something instead of at nothing.
+    const first = [...selected()][0];
+    const held = first ? { kind: "binding" as const, ref: first } : undefined;
+    const at = held ?? (view.work ? { kind: "structure" as const, ref: view.work } : undefined);
+    const result = addRule(match, {
+      ...(at ? { watch: at, actor: at } : {}),
+      ...(at?.kind === "structure"
+        ? { watch: { kind: "chest" as const }, trigger: "supply_above" as const, action: "recruit" as const }
+        : { trigger: "under_fire" as const, action: "attack_area" as const, place: { kind: "attacker" as const } }),
+      ...seed,
+    });
     report(result, "stamp");
     coach.mark("rules");
+  },
+  pickPlace: (id) => {
+    markingFor = id;
+    view.marking = true;
+    audio.play("open");
   },
   changeRule: (id, patch) => { updateRule(match, id, patch as Partial<Rule>); audio.play("click"); },
   removeRule: (id) => { removeRule(match, id); audio.play("cancel"); },
 });
 host.append(toast);
 
-const coach: Coach = new Coach((off) => {
-  shell.setTips(!off);
-  audio.play("close");
-});
+const coach: Coach = new Coach(() => audio.play("close"));
 host.append(coach.root);
 
+const takeTheField = () => {
+  const result = startBattle(match);
+  if (!result.ok) return audio.play("cancel");
+  view.selection.clear();
+  board.build(match.world);
+  audio.play("confirm");
+  audio.ambience(true);
+  paint();
+};
+
 const shell = new Shell(host, {
-  setMap: (id: MapId) => { match.setSettings({ mapId: id }); audio.play("click"); },
-  setMinutes: (minutes) => { match.setSettings({ timeLimitS: minutes * 60 }); audio.play("click"); },
-  setDifficulty: (difficulty) => { match.setSettings({ difficulty }); audio.play("click"); },
-  setTips: (on) => {
-    coach.setOff(!on);
-    // Turning it back on means the player wants teaching again, not a
-    // silent no-op because a previous session finished every lesson.
-    if (on) coach.reset();
-    shell.setTips(on);
-    audio.play("click");
-  },
-  begin: () => {
-    const result = startBattle(match);
-    if (!result.ok) return audio.play("cancel");
-    view.selection.clear();
-    board.build(match.world);
-    board.centreOn(match.world.mainCells.player);
-    audio.play("confirm");
-    audio.ambience(true);
-    paint();
+  setMap: (id: MapId) => { match.setSettings({ mapId: id }); audio.play("click"); paint(); },
+  setArea: (area: number) => { match.setSettings({ mapArea: area }); audio.play("click"); paint(); },
+  setMinutes: (minutes) => { match.setSettings({ timeLimitS: minutes * 60 }); audio.play("click"); paint(); },
+  setDifficulty: (difficulty) => { match.setSettings({ difficulty }); audio.play("click"); paint(); },
+  begin: () => { coach.setOff(true); takeTheField(); },
+  beginTutorial: () => {
+    // The tutorial is a battle, not a mode: an open field, a long clock and
+    // the weakest opposition, with the coach reset so it teaches from the top
+    // however many matches the player has already finished.
+    match.setSettings({ mapId: "plain", difficulty: 1, timeLimitS: 2100 });
+    coach.setOff(false);
+    coach.reset();
+    takeTheField();
   },
   again: () => {
     audio.ambience(false);
@@ -158,7 +178,7 @@ type Debug = Window & { __MATCH__?: Match; __VIEW__?: Overlay; __BOARD__?: Board
 (window as Debug).__BOARD__ = board;
 (window as Debug).__AUDIO__ = audio;
 
-const paint = () => shell.paint(match, webmcp);
+const paint = () => shell.paint(match);
 
 const reset = () => {
   const fresh = new Match(match.settings);
@@ -193,13 +213,23 @@ canvas.addEventListener("pointerdown", (event) => {
     orderAt(at, event.shiftKey);
     return;
   }
+  if (markingFor) {
+    // The player is marking the ground a standing order aims at.
+    const cell = board.toCell(at.x, at.y);
+    updateRule(match, markingFor, { place: { kind: "point", cell } });
+    hud.book.reopen(markingFor);
+    markingFor = null;
+    view.marking = false;
+    audio.play("stamp");
+    return;
+  }
   if (view.placing) {
     const cell = board.toCell(at.x, at.y);
-    const result = buildFob(match, cell);
+    const result = buildWork(match, view.placing, cell);
     report(result, "built");
     if (result.ok) {
-      view.placing = false;
-      hud.setBuilding(false);
+      view.placing = null;
+      hud.setBuilding(null);
     }
     return;
   }
@@ -236,16 +266,19 @@ const endDrag = (event: PointerEvent) => {
     const binding = view.bindingAt(match, at.x, at.y);
     if (!event.shiftKey) view.selection.clear();
     if (binding && binding.side === "player") {
+      view.work = null;
       view.selection.add(binding.name);
       audio.play("click");
     } else {
       const structure = view.structureAt(match, board.toCell(at.x, at.y));
-      if (structure && structure.side === "player") audio.play("click");
+      view.work = structure && structure.side === "player" ? structure.id : null;
+      if (view.work) audio.play("click");
     }
     return;
   }
   if (!event.shiftKey) view.selection.clear();
   let found = 0;
+  view.work = null;
   for (const binding of view.bindingsIn(match, box)) {
     if (binding.side !== "player") continue;
     view.selection.add(binding.name);
@@ -259,8 +292,8 @@ canvas.addEventListener("pointercancel", endDrag);
 
 const orderAt = (at: { x: number; y: number }, append: boolean) => {
   if (view.placing) {
-    view.placing = false;
-    hud.setBuilding(false);
+    view.placing = null;
+    hud.setBuilding(null);
     audio.play("cancel");
     return;
   }
@@ -293,9 +326,49 @@ canvas.addEventListener("wheel", (event) => {
   board.zoomBy(event.deltaY < 0 ? 1.12 : 1 / 1.12);
 }, { passive: false });
 
+/**
+ * Step through the formations standing about.
+ *
+ * It keeps its own cursor rather than always jumping to the first, so holding
+ * the button walks the whole list instead of bouncing off one formation.
+ */
+let idleCursor = 0;
+const goToNextIdle = () => {
+  const waiting = [...match.bindings.values()]
+    .filter((binding) => binding.side === "player"
+      && binding.order.kind !== "reserve"
+      && binding.arrived
+      && !binding.contactLatch
+      && match.bindingUnits(binding).length > 0);
+  if (!waiting.length) return;
+  idleCursor = (idleCursor + 1) % waiting.length;
+  const next = waiting[idleCursor];
+  if (!next) return;
+  view.selection.clear();
+  view.work = null;
+  view.selection.add(next.name);
+  board.centreOn(match.bindingCell(next));
+  audio.play("click");
+};
+
+const minimap = new Minimap(board, (cell) => board.centreOn(cell));
+const roster = new Roster(
+  (name, additive) => {
+    if (!additive) view.selection.clear();
+    view.work = null;
+    view.selection.add(name);
+    audio.play("click");
+  },
+  (cell) => { board.centreOn(cell); audio.play("click"); },
+);
+hud.attach(minimap.root, roster.root);
+
 const held = new Set<string>();
-window.addEventListener("keyup", (event) => held.delete(event.code));
-window.addEventListener("blur", () => held.clear());
+window.addEventListener("keyup", (event) => {
+  held.delete(event.code);
+  if (event.code === "Space") view.showPaths = false;
+});
+window.addEventListener("blur", () => { held.clear(); view.showPaths = false; });
 window.addEventListener("keydown", (event) => {
   audio.unlock();
   const typing = event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement;
@@ -312,13 +385,28 @@ window.addEventListener("keydown", (event) => {
     } else applyOrder(wanted, []);
     return;
   }
-  if (event.code === "KeyP" || event.code === "Space") {
+  if (event.code === "Tab") {
+    event.preventDefault();
+    goToNextIdle();
+    return;
+  }
+  if (event.code === "KeyP") {
     event.preventDefault();
     match.setPaused(!match.paused);
     audio.play(match.paused ? "close" : "open");
   }
+  // Held, not toggled: every formation's orders are wanted in bulk for a second
+  // at a time, which is not worth permanent screen.
+  if (event.code === "Space") {
+    event.preventDefault();
+    view.showPaths = true;
+  }
+  if (event.code === "KeyL") {
+    audio.play("click");
+    minimap.cycleLens();
+  }
   if (event.code === "KeyB") {
-    view.placing = !view.placing;
+    view.placing = view.placing ? null : "fort";
     hud.setBuilding(view.placing);
     audio.play(view.placing ? "open" : "close");
   }
@@ -328,8 +416,14 @@ window.addEventListener("keydown", (event) => {
     hud.setMuted(muted);
   }
   if (event.code === "Escape") {
-    if (view.placing) { view.placing = false; hud.setBuilding(false); }
+    if (markingFor) {
+      hud.book.reopen(markingFor);
+      markingFor = null;
+      view.marking = false;
+    }
+    else if (view.placing) { view.placing = null; hud.setBuilding(null); }
     else if (pendingOrder) pendingOrder = null;
+    else if (view.work) view.work = null;
     else view.selection.clear();
     audio.play("cancel");
   }
@@ -355,7 +449,6 @@ window.addEventListener("resize", () => {
   view.resize();
   if (match.phase !== "battle") drawHero();
 });
-shell.setTips(!coach.silenced);
 window.addEventListener("pointerdown", () => audio.unlock(), { once: true });
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) audio.suspend();
@@ -452,7 +545,9 @@ const frame = (now: number) => {
     board.sync(match);
     board.render();
     view.draw(match, now / 1000);
-    hud.update(match, view.selection);
+    hud.update(match, view.selection, view.work);
+    roster.update(match, view.selection);
+    minimap.draw(match, view.known());
     coach.update(match, view.selection);
   }
 
@@ -471,7 +566,7 @@ const frame = (now: number) => {
 };
 
 const boot = async () => {
-  webmcp = await registerWebMCPTools(match);
+  await registerWebMCPTools(match);
   paint();
 };
 

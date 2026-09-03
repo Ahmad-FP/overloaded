@@ -16,7 +16,20 @@ import type { Terrain, WorldMap } from "../domain/types";
  * mottle and the hypsometric wash. Everything above that is vector drawing.
  */
 
-const BAKE_PX = 48;
+/**
+ * Pixels per tile in the bake.
+ *
+ * Fixed at 48 while every field was about the same size. The larger fields are
+ * more than twice the area, and 48 px/tile on one of those is a forty-megabyte
+ * canvas and a bake to match, so the resolution is chosen per map against a
+ * pixel budget instead: a small field still bakes at 48, a large one steps
+ * down. Reassigned at the top of `bakeMap`, which is synchronous and runs one
+ * map at a time.
+ */
+let BAKE_PX = 48;
+
+/** The bake may cost about this many pixels, whatever the field's size. */
+const BAKE_BUDGET = 9_000_000;
 
 const INK = "#3a2c1e";
 
@@ -539,6 +552,12 @@ let cache: BakedMap | null = null;
 export const bakeMap = (map: WorldMap, metresPerTile: number): BakedMap => {
   const key = `${map.id}:${map.width}x${map.height}`;
   if (cache && cache.key === key) return cache;
+
+  // Two ceilings: the pixel budget, and a canvas no side of which exceeds
+  // what a GPU will take as one texture.
+  const budgeted = Math.floor(Math.sqrt(BAKE_BUDGET / (map.width * map.height)));
+  const texturable = Math.floor(4096 / Math.max(map.width, map.height));
+  BAKE_PX = Math.max(8, Math.min(48, budgeted, texturable));
 
   const width = map.width * BAKE_PX;
   const height = map.height * BAKE_PX;

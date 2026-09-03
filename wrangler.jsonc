@@ -2,5 +2,12 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "overloaded",
   "compatibility_date": "2026-09-01",
-  "pages_build_output_dir": "./dist"
+  // Served as a Worker with static assets rather than through Pages, so the
+  // game lives on a workers.dev endpoint. `single-page-application` sends any
+  // unknown path to index.html, which is what `public/_redirects` did before.
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  },
+  "observability": { "enabled": true }
 }

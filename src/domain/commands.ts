@@ -1,4 +1,5 @@
 import { botThink } from "./bot";
+import type { WorkKind } from "./constants";
 import { Match, unitCost, type OrderPatch } from "./match";
 import {
   inspectBinding, inspectCell, inspectContact, inspectStructure, overview, readAlerts,
@@ -22,7 +23,8 @@ export const tickMatch = (match: Match, dt: number) => {
 export const recruit = (match: Match, structureId: string, type: UnitType, count: number, grade: Quality = 2, side: Side = "player") =>
   match.recruit(side, structureId, type, count, grade);
 
-export const buildFob = (match: Match, cell: Cell, side: Side = "player") => match.buildFob(side, cell);
+export const buildWork = (match: Match, kind: WorkKind, cell: Cell, side: Side = "player") =>
+  match.build(side, kind, cell);
 
 export const bindUnits = (match: Match, unitIds: string[], name?: string, side: Side = "player") =>
   match.bind(side, unitIds, name);

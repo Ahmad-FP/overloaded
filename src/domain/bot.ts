@@ -1,5 +1,4 @@
-import { FOB_COST, FOB_REACH_TILES } from "./constants";
-import { makeRule } from "./rules";
+import { WORKS, WORK_REACH_TILES } from "./constants";
 import { cellOf } from "./terrain";
 import type { Match } from "./match";
 import type { Binding, Cell, Structure, UnitType } from "./types";
@@ -17,38 +16,24 @@ import type { Binding, Cell, Structure, UnitType } from "./types";
 
 const gap = (a: Cell, b: Cell) => Math.hypot(a.x - b.x, a.y - b.y);
 
-/** Two lines that make the enemy react to raids without the player seeing the code. */
-const seedBotRules = (match: Match) => {
-  if (match.rules.some((rule) => rule.side === "enemy")) return;
-  match.rules.push(
-    makeRule(match.id("r"), "enemy", {
-      name: "Cover the line",
-      subject: { kind: "any_structure" },
-      event: "supply_cut",
-      actor: { kind: "nearest_reserve" },
-      action: "attack_area",
-      where: "subject_cell",
-      cooldownS: 25,
-    }),
-    makeRule(match.id("r"), "enemy", {
-      name: "Break contact",
-      subject: { kind: "any_binding" },
-      event: "weakened",
-      threshold: 35,
-      actor: { kind: "self" },
-      action: "retreat",
-      where: "actor_cell",
-      cooldownS: 30,
-    }),
-  );
-};
-
 const spendable = (match: Match) => match.supply.enemy;
+
+/**
+ * How large an army the opposing staff will keep in the field.
+ *
+ * Easy is not a slower version of Hard: on the lowest setting the enemy stops
+ * raising once it has a fair field force, so a player who is still learning
+ * where the depots are has an army to learn with rather than a hundred and
+ * forty men at the gate by the sixth minute.
+ */
+const ARMY_CAP = [0, 90, 150, 260] as const;
 
 /** Raise men wherever it can, weighted to what it is short of. */
 const raise = (match: Match) => {
   const bases = match.structuresOf("enemy").filter((s) => s.connected && s.build >= 1 && s.kind !== "depot");
   if (!bases.length) return;
+  const cap = ARMY_CAP[match.settings.difficulty] ?? 150;
+  if (match.living("enemy").length >= cap) return;
   const mix = tally(match);
   const want: UnitType = mix.infantry < 40 ? "infantry" : mix.artillery < 2 ? "artillery" : mix.cavalry < 18 ? "cavalry" : "infantry";
   const count = want === "artillery" ? 1 : want === "cavalry" ? 8 : 16;
@@ -65,7 +50,10 @@ const tally = (match: Match) => {
 
 /** Push the network toward the nearest depot it does not hold. */
 const extend = (match: Match) => {
-  if (spendable(match) < FOB_COST * 1.6) return;
+  // An easy opponent banks before it builds, so its network creeps forward
+  // instead of reaching every depot on the field inside four minutes.
+  const thrift = match.settings.difficulty === 1 ? 3.4 : 1.6;
+  if (spendable(match) < WORKS.fort.cost * thrift) return;
   const mine = match.structuresOf("enemy").filter((s) => s.connected);
   const prizes = [...match.structures.values()].filter((s) => s.kind === "depot" && s.side !== "enemy");
   if (!mine.length || !prizes.length) return;
@@ -73,7 +61,7 @@ const extend = (match: Match) => {
   for (const prize of prizes) {
     for (const anchor of mine) {
       const reach = gap(anchor.cell, prize.cell);
-      const step = Math.min(1, (FOB_REACH_TILES - 2) / Math.max(1, reach));
+      const step = Math.min(1, (WORK_REACH_TILES - 2) / Math.max(1, reach));
       const at = {
         x: Math.round(anchor.cell.x + (prize.cell.x - anchor.cell.x) * step),
         y: Math.round(anchor.cell.y + (prize.cell.y - anchor.cell.y) * step),
@@ -82,7 +70,7 @@ const extend = (match: Match) => {
       if (!best || score < best.score) best = { at, score };
     }
   }
-  if (best) match.buildFob("enemy", best.at);
+  if (best) match.build("enemy", "fort", best.at);
 };
 
 /**
@@ -114,6 +102,28 @@ const idleFormations = (match: Match) =>
   [...match.bindings.values()].filter((binding) =>
     binding.side === "enemy" && needsOrders(match, binding));
 
+/**
+ * The nearest enemy column, and how far off it is.
+ *
+ * The staff had no notion of an army in front of it: it only ever reacted to
+ * one of its own works being hurt. On a small field that hardly showed,
+ * because everything was within a few hundred metres of everything else. On
+ * these fields it meant the two armies walked past each other to opposite
+ * corners and the battle never happened.
+ */
+const nearestColumn = (match: Match, here: Cell, reach: number) => {
+  let best: { cell: Cell; gap: number } | null = null;
+  for (const binding of match.bindings.values()) {
+    if (binding.side !== "player") continue;
+    if (!match.bindingUnits(binding).length) continue;
+    const cell = match.bindingCell(binding);
+    const off = gap(cell, here);
+    if (off > reach || (best && off >= best.gap)) continue;
+    best = { cell, gap: off };
+  }
+  return best;
+};
+
 /** Give every formation a job: take a depot, screen a line, or press the attack. */
 const assign = (match: Match) => {
   const formations = idleFormations(match);
@@ -144,9 +154,20 @@ const assign = (match: Match) => {
       continue;
     }
 
+    // A column marching through your ground beats a depot two hundred metres
+    // away. Harder settings look further out for one.
+    const column = nearestColumn(match, here, 14 + pressure * 7);
     const prize = prizes
       .filter((s) => !claimed.has(s.id))
       .sort((a, b) => gap(a.cell, here) - gap(b.cell, here))[0];
+    if (column && (!prize || column.gap < gap(prize.cell, here))) {
+      match.issue(
+        binding.name,
+        { order: kind === "cavalry" ? "charge" : "attack_area", cells: [column.cell] },
+        "enemy",
+      );
+      continue;
+    }
     if (prize) {
       claimed.add(prize.id);
       match.issue(binding.name, { order: kind === "cavalry" ? "move" : "attack_area", cells: [prize.cell] }, "enemy");
@@ -186,7 +207,6 @@ const nearestFoeCell = (match: Match, from: Cell): Cell | null => {
 
 export const botThink = (match: Match) => {
   if (match.phase !== "battle" || match.result) return;
-  seedBotRules(match);
   raise(match);
   extend(match);
   assign(match);

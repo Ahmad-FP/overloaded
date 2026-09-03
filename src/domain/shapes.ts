@@ -97,3 +97,16 @@ export const worldSlots = (
   spacing: number,
   facing: number,
 ) => slotOffsets(shape, count, spacing, facing).map((slot) => ({ x: origin.x + slot.x, z: origin.z + slot.z }));
+
+/**
+ * How wide a formation stands, in metres, across its front.
+ *
+ * Used to decide whether it will fit through the ground ahead of it.
+ */
+export const frontage = (shape: Shape, count: number, spacing: number) => {
+  const s = Math.max(1.6, spacing);
+  if (shape === "column") return s * 2;
+  if (shape === "square") return Math.max(3, Math.ceil(count / 4)) * s;
+  if (shape === "skirmish") return Math.ceil(Math.sqrt(count * 1.6)) * s * 1.45;
+  return Math.ceil(count / 2) * s;
+};

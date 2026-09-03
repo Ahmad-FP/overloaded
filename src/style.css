@@ -55,6 +55,25 @@
     0 1.1rem 2.6rem rgba(0, 0, 0, 0.62);
   /* Fine rolled-metal grain, laid over the plate at low opacity. */
   --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+  /* A key you can press: catch along the top, body falling away, hard foot. */
+  --key:
+    linear-gradient(178deg, #2b323f 0, #222836 46%, #171c26 100%);
+  --key-lit:
+    linear-gradient(178deg, #39424f 0, #2c3341 46%, #1e242f 100%);
+  --key-edge:
+    inset 0 1px 0 rgba(255, 246, 214, 0.16),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.55),
+    inset 0 0 0 1px rgba(216, 180, 73, 0.22),
+    0 1px 0 rgba(0, 0, 0, 0.55);
+  /* Pressed: the bevel inverts and the face sinks. */
+  --key-sunk:
+    inset 0 2px 5px rgba(0, 0, 0, 0.7),
+    inset 0 0 0 1px rgba(216, 180, 73, 0.3);
+  /* Anything that holds a value is cut into the plate, not sitting on it. */
+  --well:
+    inset 0 2px 4px rgba(0, 0, 0, 0.62),
+    inset 0 -1px 0 rgba(255, 246, 214, 0.07),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.5);
   --cut: polygon(
     var(--chamfer) 0, 100% 0, 100% calc(100% - var(--chamfer)),
     calc(100% - var(--chamfer)) 100%, 0 100%, 0 var(--chamfer)
@@ -149,6 +168,29 @@ button { cursor: pointer; }
   text-shadow: 0 1px 0 rgba(0, 0, 0, 0.7);
 }
 
+
+/* A folded panel keeps its nameplate and gives the board back its room. */
+.panel-body { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.panel[data-folded="1"] > .panel-body { display: none; }
+.panel[data-folded="1"] { flex: 0 0 auto !important; }
+
+.fold {
+  flex: none;
+  width: 1.3rem;
+  height: 1.3rem;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: none;
+  color: var(--gilt-dim);
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.fold:hover { color: var(--gilt); }
+.panel-head h2 { flex: 1; min-width: 0; }
+.panel-tools { display: flex; align-items: center; gap: 0.4rem; flex: none; min-width: 0; }
+
 .empty {
   margin: 0;
   padding: 1.1rem 0.85rem;
@@ -163,12 +205,13 @@ button { cursor: pointer; }
   position: absolute;
   inset: 0;
   display: grid;
-  grid-template-columns: var(--rail) 1fr var(--book);
-  grid-template-rows: auto 1fr auto;
+  grid-template-columns: var(--rail) minmax(0, 1fr) var(--book);
+  grid-template-rows: auto 1fr auto auto;
   grid-template-areas:
-    "top  top   top"
-    "left .     right"
-    "left tray  right";
+    "top  top     top"
+    "left .       right"
+    "left roster  right"
+    "left tray    right";
   gap: 0.7rem;
   padding: 0.7rem;
   pointer-events: none;
@@ -230,8 +273,10 @@ body[data-phase="result"] .hud { display: none; }
 .tools { gap: 0.3rem; padding: 0.35rem 0.5rem; }
 
 .tool {
-  border: 1px solid rgba(216, 180, 73, 0.24);
-  background: transparent;
+  border: 0;
+  border-radius: 1px;
+  background: var(--key);
+  box-shadow: var(--key-edge);
   color: var(--parchment-dim);
   font-family: var(--util);
   font-size: 0.74rem;
@@ -242,8 +287,9 @@ body[data-phase="result"] .hud { display: none; }
   transition: color 120ms, border-color 120ms, background 120ms;
 }
 
-.tool:hover { color: var(--gilt); border-color: var(--gilt-dim); background: rgba(216, 180, 73, 0.08); }
-.tool[data-off="1"] { color: var(--red); border-color: rgba(196, 87, 74, 0.4); }
+.tool:hover { color: var(--gilt); background: var(--key-lit); }
+.tool:active { box-shadow: var(--key-sunk); background: var(--steel-deep); }
+.tool[data-off="1"] { color: var(--red); box-shadow: var(--key-sunk); background: var(--steel-deep); }
 
 /* -- rails --------------------------------------------------------------- */
 
@@ -257,8 +303,14 @@ body[data-phase="result"] .hud { display: none; }
 .rail.left { grid-area: left; }
 .rail.right { grid-area: right; }
 .rail > .panel { min-height: 0; }
-.rail.right > .book { flex: 3 1 0; }
-.rail.right > .dispatches { flex: 2 1 0; }
+/* The book takes what it needs and no more; the dispatch pane is a fixed
+   window on the traffic that scrolls, rather than a list that grows until it
+   owns the screen. */
+.rail.right > .book { flex: 0 1 auto; max-height: 52%; }
+.book .book-list { flex: 1 1 auto; min-height: 0; }
+/* Fixed, not growing: the traffic is endless and the panel is a window on it. */
+.rail.right > .dispatches { flex: 0 0 auto; height: 17rem; }
+.rail.right > .dispatches[data-folded="1"] { height: auto; }
 
 /* -- works --------------------------------------------------------------- */
 
@@ -279,11 +331,8 @@ body[data-phase="result"] .hud { display: none; }
 .primary[data-armed="1"] {
   background: var(--gilt);
   color: var(--ink);
-  animation: pulse 1.4s ease-in-out infinite;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.45);
 }
-
-@keyframes pulse { 50% { box-shadow: 0 0 0 4px rgba(216, 180, 73, 0.18); } }
-@media (prefers-reduced-motion: reduce) { .primary[data-armed="1"] { animation: none; } }
 
 .base-list, .feed, .book-list {
   overflow-y: auto;
@@ -468,43 +517,330 @@ body[data-phase="result"] .hud { display: none; }
 .ghost:hover { background: rgba(216, 180, 73, 0.14); }
 
 .rule {
-  padding: 0.5rem 0.7rem 0.55rem;
-  border-bottom: 1px solid rgba(216, 180, 73, 0.1);
   display: flex;
-  flex-direction: column;
+  align-items: flex-start;
   gap: 0.3rem;
+  padding: 0.5rem 0.6rem 0.55rem 0.7rem;
+  border-bottom: 1px solid rgba(216, 180, 73, 0.1);
 }
 
 .rule[data-off="1"] { opacity: 0.45; }
 
-.rule-head { display: flex; align-items: center; gap: 0.35rem; }
-
-.rule-name {
+/* The whole line is the way in: it reads as a sentence and opens the sheet. */
+.rule-open {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
   border: 0;
-  border-bottom: 1px solid transparent;
   background: none;
-  padding: 0 0 1px;
-  font-family: var(--display);
-  font-size: 0.82rem;
-  font-weight: 600;
-  letter-spacing: 0.05em;
+  padding: 0;
+  text-align: left;
+  color: inherit;
+}
+
+.rule-open:hover .rule-text { color: var(--gilt); }
+
+.rule-text {
+  font-size: 0.84rem;
+  line-height: 1.4;
   color: var(--parchment);
 }
 
-.rule-name:hover { border-bottom-color: rgba(216, 180, 73, 0.3); }
-.rule-name:focus { outline: none; border-bottom-color: var(--gilt); }
-
-.rule-state {
+/* An order that has not been given its ground says so rather than pretending. */
+.rule-gap {
   font-family: var(--util);
-  font-size: 0.6rem;
+  font-size: 0.64rem;
   font-weight: 300;
-  letter-spacing: 0.09em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
+  color: var(--red);
+}
+
+/* A band heading, in the panel and on the order card. Two words, no lecture. */
+.order-band {
+  margin: 0.55rem 0.7rem 0.2rem;
+  padding-bottom: 0.18rem;
+  border-bottom: 1px solid rgba(216, 180, 73, 0.24);
+  font-family: var(--display);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--gilt);
+}
+
+.order-band:first-child { margin-top: 0.15rem; }
+
+/* What the army is doing this minute: one static line per formation. */
+.order-live {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 9.5rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.live-row {
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  border: 0;
+  background: none;
+  text-align: left;
+  color: inherit;
+  padding: 0.22rem 0.7rem;
+}
+
+.live-row:hover { background: rgba(216, 180, 73, 0.1); }
+
+.live-name {
+  flex: none;
+  font-family: var(--display);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--parchment);
+}
+
+.live-doing {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--util);
+  font-size: 0.72rem;
+  font-weight: 300;
   color: var(--parchment-faint);
+}
+
+.rule-tools { display: flex; align-items: center; gap: 0.15rem; flex: none; }
+.rule-tools .icon svg { width: 0.95rem; height: 0.95rem; }
+
+.kw { color: var(--parchment-faint); font-style: italic; }
+.kw.arrow { color: var(--gilt); font-style: normal; font-size: 0.95rem; }
+
+.num {
+  width: 3.2rem;
+  background: rgba(0, 0, 0, 0.34);
+  border: 0;
+  box-shadow: var(--well);
+  color: var(--crate);
+  font-family: var(--util);
+  font-size: 0.76rem;
+  font-weight: 300;
+  padding: 0.16rem 0.3rem;
+  font-variant-numeric: tabular-nums;
+}
+
+input[type="checkbox"] { accent-color: var(--gilt); margin: 0; }
+
+
+/* -- the works list ------------------------------------------------------ */
+
+.work-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  width: 100%;
+  padding: 0.45rem 0.7rem 0.5rem;
+  border: 0;
+  border-bottom: 1px solid rgba(216, 180, 73, 0.1);
+  background: none;
+  text-align: left;
+  color: inherit;
+}
+
+.work-row:hover { background: rgba(216, 180, 73, 0.07); }
+.work-row[data-on="1"] { background: rgba(216, 180, 73, 0.13); box-shadow: inset 2px 0 0 var(--gilt); }
+.work-row[data-kind="main"] { background: rgba(79, 127, 200, 0.07); }
+.work-row[data-cut="1"] { background: rgba(168, 57, 44, 0.12); }
+
+.work-row-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-family: var(--display);
+  font-size: 0.84rem;
+  letter-spacing: 0.04em;
+  color: var(--parchment);
+}
+
+.work-making {
+  font-family: var(--util);
+  font-size: 0.66rem;
+  font-weight: 300;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--crate);
+}
+
+/* -- raising men --------------------------------------------------------- */
+
+.raise { display: flex; align-items: center; gap: 0.4rem; }
+.raise .num { width: 3.4rem; text-align: center; }
+
+.step {
+  width: 1.5rem;
+  height: 1.5rem;
+  flex: none;
+  border: 0;
+  background: var(--key);
+  box-shadow: var(--key-edge);
+  color: var(--gilt);
+  font-family: var(--util);
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
+.step:hover { background: var(--key-lit); }
+.step:active { box-shadow: var(--key-sunk); }
+.raise .primary:disabled { opacity: 0.4; cursor: default; }
+
+/* -- dropdowns ----------------------------------------------------------- */
+
+/*
+ * A struck key that reads its value, and a list that opens in a layer of its
+ * own. A native select would open the operating system's white menu in the
+ * system font over a board that is otherwise all brass and walnut.
+ */
+.pick {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  max-width: 100%;
+  border: 0;
+  background: var(--key);
+  box-shadow: var(--key-edge);
+  color: var(--crate);
+  font-family: var(--util);
+  font-size: 0.76rem;
+  font-weight: 300;
+  letter-spacing: 0.02em;
+  padding: 0.2rem 0.45rem;
+  text-align: left;
+}
+
+.pick:hover { background: var(--key-lit); color: var(--parchment); }
+.pick[data-open="1"] { background: var(--key-lit); box-shadow: var(--key-sunk); color: var(--parchment); }
+.pick.wide { flex: 1 1 5rem; min-width: 0; }
+.pick-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.pick-caret {
+  flex: none;
+  width: 0;
+  height: 0;
+  border-left: 0.26rem solid transparent;
+  border-right: 0.26rem solid transparent;
+  border-top: 0.3rem solid var(--gilt-dim);
+}
+
+.pick-menu {
+  position: fixed;
+  z-index: 60;
+  max-height: min(21rem, 58vh);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 0.25rem;
+  /* Lit, not another dark plate: an open menu is the thing being looked at,
+     and it has to clear the panel or the scrim it is standing over. */
+  background: linear-gradient(178deg, #2c3441 0, #212936 55%, #181d27 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(216, 180, 73, 0.34),
+    inset 0 1px 0 rgba(255, 246, 214, 0.16),
+    0 1.2rem 2.6rem rgba(0, 0, 0, 0.72);
+  clip-path: var(--cut);
+  scrollbar-width: thin;
+  scrollbar-color: var(--gilt-dim) transparent;
+}
+
+.pick-item {
+  border: 0;
+  background: none;
+  text-align: left;
+  font-family: var(--util);
+  font-size: 0.78rem;
+  font-weight: 300;
+  letter-spacing: 0.02em;
+  color: var(--parchment-dim);
+  padding: 0.3rem 0.6rem;
   white-space: nowrap;
 }
+
+.pick-item { color: var(--parchment-dim); }
+.pick-item:hover { background: rgba(216, 180, 73, 0.18); color: var(--parchment); }
+.pick-item[data-on="1"] { color: var(--gilt); }
+
+/* -- the order sheet ----------------------------------------------------- */
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: rgba(6, 8, 12, 0.72);
+}
+
+.scrim[data-on="0"] { display: none; }
+
+.sheet {
+  /* Raised off the scrim: the same instrument plate, one stop lighter, so the
+     sheet reads as the lit thing and the board behind it recedes. */
+  background: linear-gradient(177deg, #2a313e 0, #1e2431 42%, #151a23 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(216, 180, 73, 0.34),
+    inset 0 1px 0 rgba(255, 246, 214, 0.15),
+    0 1.6rem 3.4rem rgba(0, 0, 0, 0.75);
+  width: min(30rem, calc(100vw - 2rem));
+  max-height: min(82vh, 46rem);
+  overflow-y: auto;
+  padding-bottom: 0.9rem;
+  gap: 0.7rem;
+}
+
+.sheet-head { flex: none; }
+
+/* The order as it will read on the field. Written by the pickers below it,
+   never typed into, so it carries no control affordance of its own. */
+.sheet-reads {
+  margin: 0 0.9rem;
+  padding: 0.5rem 0.75rem;
+  border-left: 2px solid var(--gilt);
+  background: rgba(0, 0, 0, 0.26);
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: var(--parchment);
+}
+
+.sheet-rows { display: flex; flex-direction: column; gap: 0.1rem; margin: 0 0.9rem; }
+.sheet-rows .order-band { margin-left: 0; margin-right: 0; }
+
+.sheet-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.4rem 0;
+}
+
+.sheet-feet {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0.4rem 0.9rem 0;
+  padding-top: 0.5rem;
+  border-top: 1px solid rgba(216, 180, 73, 0.18);
+}
+
+.sheet-feet .begin { margin-left: auto; padding: 0.45rem 1.5rem; }
+.sheet-feet .check { display: inline-flex; align-items: center; gap: 0.3rem; font-family: var(--util); font-size: 0.72rem; font-weight: 300; color: var(--parchment-dim); cursor: pointer; }
 
 .icon {
   flex: none;
@@ -522,50 +858,6 @@ body[data-phase="result"] .hud { display: none; }
 .icon:hover { color: var(--gilt); }
 .icon.danger:hover { color: var(--red); }
 
-.rule-line {
-  margin: 0;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.22rem 0.28rem;
-  font-size: 0.85rem;
-  line-height: 1.6;
-}
-
-.kw { color: var(--parchment-faint); font-style: italic; }
-.kw.arrow { color: var(--gilt); font-style: normal; font-size: 0.95rem; }
-
-.chip {
-  appearance: none;
-  border: 0;
-  border-bottom: 1px dotted var(--gilt-dim);
-  background: rgba(216, 180, 73, 0.08);
-  color: var(--crate);
-  font-family: var(--util);
-  font-size: 0.78rem;
-  font-weight: 300;
-  letter-spacing: 0.02em;
-  padding: 0.05rem 0.25rem;
-  max-width: 100%;
-}
-
-.chip:hover { background: rgba(216, 180, 73, 0.18); color: var(--parchment); }
-.chip.num { width: 3.4rem; font-variant-numeric: tabular-nums; }
-
-.rule-foot {
-  display: flex;
-  align-items: center;
-  gap: 0.7rem;
-  font-family: var(--util);
-  font-size: 0.68rem;
-  font-weight: 300;
-  letter-spacing: 0.06em;
-  color: var(--parchment-faint);
-}
-
-.rule-foot .check { display: inline-flex; align-items: center; gap: 0.25rem; cursor: pointer; }
-.rule-foot .num { width: 2.9rem; background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(216, 180, 73, 0.18); color: var(--parchment-dim); padding: 0.02rem 0.2rem; font-variant-numeric: tabular-nums; }
-
 input[type="checkbox"] { accent-color: var(--gilt); margin: 0; }
 
 /* -- selection tray ------------------------------------------------------ */
@@ -574,10 +866,11 @@ input[type="checkbox"] { accent-color: var(--gilt); margin: 0; }
   grid-area: tray;
   justify-self: center;
   align-self: end;
-  max-width: min(52rem, 100%);
+  max-width: min(64rem, 100%);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 1rem;
+  gap: 0.55rem 1rem;
   padding: 0.5rem 1rem;
   background: var(--plate);
   box-shadow: var(--edge);
@@ -612,7 +905,8 @@ input[type="checkbox"] { accent-color: var(--gilt); margin: 0; }
 
 .verb {
   border: 0;
-  background: var(--steel);
+  background: var(--key);
+  box-shadow: var(--key-edge);
   color: var(--parchment-dim);
   font-family: var(--util);
   font-size: 0.72rem;
@@ -623,8 +917,14 @@ input[type="checkbox"] { accent-color: var(--gilt); margin: 0; }
   white-space: nowrap;
 }
 
-.verb:hover { background: var(--steel-lit); color: var(--parchment); }
-.verb[data-on="1"] { background: var(--gilt); color: var(--ink); font-weight: 500; }
+.verb:hover { background: var(--key-lit); color: var(--parchment); }
+.verb:active { box-shadow: var(--key-sunk); }
+.verb[data-on="1"] {
+  background: linear-gradient(178deg, #f0d489 0, var(--gilt) 44%, #a8862c 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 252, 232, 0.5), inset 0 -2px 0 rgba(0, 0, 0, 0.3), 0 1px 0 rgba(0, 0, 0, 0.5);
+  color: var(--ink);
+  font-weight: 500;
+}
 
 .knobs { display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap; }
 
@@ -639,18 +939,7 @@ input[type="checkbox"] { accent-color: var(--gilt); margin: 0; }
   color: var(--parchment-faint);
 }
 
-.knob select {
-  appearance: none;
-  border: 0;
-  border-bottom: 1px dotted var(--gilt-dim);
-  background: rgba(216, 180, 73, 0.08);
-  color: var(--crate);
-  font-family: var(--util);
-  font-size: 0.74rem;
-  font-weight: 300;
-  padding: 0.05rem 0.25rem;
-  text-transform: capitalize;
-}
+.knob .pick { text-transform: capitalize; min-width: 6.2rem; }
 
 .knob-value {
   font-family: var(--util);
@@ -899,17 +1188,6 @@ input[type="checkbox"] { accent-color: var(--gilt); margin: 0; }
 .begin:hover { filter: brightness(1.12); transform: translateY(-1px); }
 .card.narrow .begin { align-self: center; }
 
-.mcp {
-  margin: 0;
-  font-size: 0.82rem;
-  line-height: 1.4;
-  color: var(--parchment-faint);
-  border-left: 2px solid rgba(216, 180, 73, 0.25);
-  padding-left: 0.7rem;
-}
-
-.mcp[data-on="1"] { color: var(--parchment-dim); border-left-color: var(--gilt); }
-
 .result h1 {
   margin: 0;
   font-family: var(--display);
@@ -973,6 +1251,12 @@ input[type="checkbox"] { accent-color: var(--gilt); margin: 0; }
   }
   .rail.left { display: none; }
   .rail.right { max-height: 42vh; }
+  /* One column: the panels are stacked over the board, so they take the width
+     they are given and the dispatch pane stops being a fixed desk instrument. */
+  .rail.right > .book { max-height: none; }
+  .rail.right > .dispatches { height: auto; flex: 1 1 auto; min-height: 0; }
+  .panel-head { flex-wrap: nowrap; }
+  .panel-head h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* The bar is clipped to a cut corner, so anything that overflows is simply
      gone rather than scrollable. On a phone it has to wrap and tighten. */
   .topbar {
@@ -1080,3 +1364,616 @@ input[type="checkbox"] { accent-color: var(--gilt); margin: 0; }
 }
 
 .coach-mute:hover { color: var(--parchment-dim); text-decoration: underline; }
+
+/* -- the title menu ------------------------------------------------------ */
+
+.boot-body { display: flex; flex-direction: column; gap: 1.3rem; }
+
+.menu { display: flex; flex-direction: column; gap: 1px; background: rgba(216, 180, 73, 0.16); }
+
+.menu-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  padding: 0.72rem 0.9rem;
+  border: 0;
+  border-inline-start: 2px solid transparent;
+  background: var(--plate);
+  color: var(--parchment);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms, background 120ms;
+}
+
+.menu-item strong {
+  font-family: var(--display);
+  font-size: 1.02rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.menu-note {
+  font-family: var(--util);
+  font-size: 0.74rem;
+  font-weight: 300;
+  color: var(--parchment-faint);
+}
+
+.menu-item:hover {
+  border-inline-start-color: var(--gilt);
+  background: var(--steel-lit);
+}
+
+.menu-item:hover strong { color: var(--gilt); }
+
+.card-feet { display: flex; align-items: center; gap: 0.7rem; }
+.card-feet .begin { margin-inline-start: auto; }
+
+.back {
+  border: 1px solid rgba(216, 180, 73, 0.28);
+  background: transparent;
+  color: var(--parchment-dim);
+  font-family: var(--util);
+  font-size: 0.74rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 0.4rem 0.9rem;
+  cursor: pointer;
+}
+
+.back:hover { color: var(--gilt); border-color: var(--gilt-dim); background: rgba(216, 180, 73, 0.08); }
+
+.lede { margin: 0; font-size: 0.92rem; line-height: 1.55; color: var(--parchment-dim); }
+
+/* The controls card: two columns, key then meaning. */
+.keys {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.3rem 0.8rem;
+  align-items: baseline;
+  max-height: 46vh;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--gilt-dim) transparent;
+}
+
+.keys dt {
+  font-family: var(--util);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--gilt);
+  white-space: nowrap;
+}
+
+.keys dd { margin: 0; font-size: 0.84rem; color: var(--parchment-dim); }
+
+/* -- panel furniture ----------------------------------------------------- */
+
+/* Circles, bevels and inset tracks: the three things Civilization's plates
+   do that flat borders do not. A control should look struck rather than
+   drawn, and a readout should sit in a socket. */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.7rem;
+  height: 1.7rem;
+  flex: none;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 34% 26%, rgba(255, 255, 255, 0.16), transparent 58%),
+    linear-gradient(180deg, var(--steel-lit), var(--steel-deep));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.13),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(216, 180, 73, 0.3);
+}
+
+.badge .ico { width: 0.95rem; height: 0.95rem; }
+.res:first-child .badge { box-shadow: inset 0 1px 0 rgba(255,255,255,0.13), inset 0 -1px 0 rgba(0,0,0,0.55), 0 0 0 1px rgba(216, 180, 73, 0.5); }
+
+.tool, .back, .primary, .buy-btn, .verb, .choice, .coach-got {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), inset 0 -1px 0 rgba(0, 0, 0, 0.4);
+}
+
+.tool:active, .primary:active, .buy-btn:active, .verb:active, .choice:active, .back:active, .coach-got:active {
+  box-shadow: inset 0 2px 3px rgba(0, 0, 0, 0.55);
+}
+
+/* Sockets, not lines. */
+.hpbar, .meter {
+  height: 5px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.66), rgba(0, 0, 0, 0.4));
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.7), 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.hpbar i, .meter i {
+  border-radius: 3px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+.meter i { background: linear-gradient(180deg, var(--gilt), var(--gilt-dim)); }
+
+
+/* -- the returns --------------------------------------------------------- */
+
+.standing {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.85rem;
+  background: var(--plate);
+}
+
+.scale-wrap { display: flex; flex-direction: column; gap: 0.2rem; min-width: 8.5rem; }
+
+.scale {
+  display: flex;
+  height: 0.46rem;
+  background: rgba(0, 0, 0, 0.55);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(216, 180, 73, 0.16);
+}
+
+.scale i { display: block; height: 100%; transition: width 0.35s ease; }
+.scale .mine { background: linear-gradient(180deg, var(--blue) 0, var(--blue-deep) 100%); }
+.scale .theirs { background: linear-gradient(180deg, var(--red) 0, var(--red-deep) 100%); }
+
+.tallies {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-family: var(--util);
+  font-size: 0.66rem;
+  font-weight: 300;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--parchment-faint);
+}
+
+.tallies .tally { font-size: 0.8rem; letter-spacing: 0.02em; }
+
+.tally { font-variant-numeric: tabular-nums; font-weight: 500; }
+.tally.mine { color: var(--blue); }
+.tally.theirs { color: var(--red); }
+
+/* -- the field, and its lenses ------------------------------------------- */
+
+.map-slot { display: flex; }
+.minimap { flex: 0 0 auto; padding-bottom: 0.5rem; }
+
+.lenses {
+  display: flex;
+  gap: 1px;
+  margin: 0 0.55rem 0.45rem;
+  background: rgba(216, 180, 73, 0.2);
+}
+
+.lens {
+  flex: 1;
+  background: var(--key);
+  box-shadow: var(--key-edge);
+  padding: 0.3rem 0;
+  font-family: var(--util);
+  font-size: 0.64rem;
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--parchment-faint);
+  background: var(--steel-deep);
+  border: 0;
+  cursor: pointer;
+}
+
+.lens:hover { color: var(--parchment-dim); background: var(--key-lit); }
+.lens[data-on="1"] {
+  color: var(--ink);
+  background: linear-gradient(178deg, #f0d489 0, var(--gilt) 44%, #a8862c 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 252, 232, 0.5), inset 0 -2px 0 rgba(0, 0, 0, 0.3);
+}
+
+.minimap-canvas {
+  display: block;
+  width: calc(100% - 1.1rem);
+  margin: 0 0.55rem;
+  aspect-ratio: 260 / 178;
+  cursor: crosshair;
+  background: var(--ink);
+  box-shadow: inset 0 0 0 1px rgba(216, 180, 73, 0.28), inset 0 2px 8px rgba(0, 0, 0, 0.7);
+}
+
+/* -- the roster ---------------------------------------------------------- */
+
+.roster-slot { grid-area: roster; justify-self: center; min-width: 0; max-width: 100%; }
+
+.roster {
+  display: flex;
+  gap: 0.3rem;
+  overflow-x: auto;
+  padding-bottom: 0.2rem;
+  scrollbar-width: thin;
+}
+
+.roster[data-empty="1"] { display: none; }
+
+.card-unit {
+  flex: 0 0 8.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  padding: 0.4rem 0.5rem 0.42rem;
+  text-align: left;
+  background: var(--plate);
+  border: 0;
+  box-shadow: var(--edge);
+  clip-path: var(--cut);
+  cursor: pointer;
+  transition: transform 0.12s ease;
+}
+
+.card-unit:hover { transform: translateY(-2px); }
+.card-unit[data-on="1"] {
+  box-shadow: 0 0 0 2px var(--gilt), inset 0 1px 0 rgba(255, 246, 214, 0.2), 0 1rem 2rem rgba(0, 0, 0, 0.6);
+  background:
+    linear-gradient(177deg, rgba(216, 180, 73, 0.18) 0, rgba(216, 180, 73, 0.05) 55%, rgba(216, 180, 73, 0) 100%),
+    var(--plate);
+}
+.card-unit[data-on="1"] .card-head strong { color: var(--gilt); }
+
+.card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.32rem;
+  font-family: var(--util);
+  font-size: 0.78rem;
+  letter-spacing: 0.03em;
+  color: var(--parchment);
+}
+
+.card-head strong { flex: 1; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-mark { font-size: 0.68rem; color: var(--blue); }
+.card-unit[data-arm="cavalry"] .card-mark { color: #9a7fd0; }
+.card-unit[data-arm="artillery"] .card-mark { color: var(--crate); }
+
+.card-count {
+  font-size: 0.68rem;
+  font-weight: 300;
+  font-variant-numeric: tabular-nums;
+  color: var(--parchment-faint);
+}
+
+.card-track {
+  display: block;
+  height: 0.3rem;
+  background: rgba(0, 0, 0, 0.6);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.75);
+}
+
+.card-track i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(180deg, #8fae5e 0, #5f7a3a 100%);
+  transition: width 0.3s ease;
+}
+
+.card-unit[data-hurt="1"] .card-track i { background: linear-gradient(180deg, var(--red) 0, var(--red-deep) 100%); }
+
+.card-state {
+  font-family: var(--util);
+  font-size: 0.62rem;
+  font-weight: 300;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--parchment-faint);
+}
+
+/* The two states worth interrupting for. Marked, not flashed at: a light
+   that blinks on a battle map is a smoke alarm, not a report. */
+.card-unit[data-state="fired-on"] {
+  box-shadow: 0 0 0 1px var(--red), inset 0 1px 0 rgba(255, 246, 214, 0.13), 0 1rem 2rem rgba(0, 0, 0, 0.6);
+}
+.card-unit[data-state="fired-on"] .card-state { color: var(--red); }
+.card-unit[data-state="routing"] { filter: grayscale(1); opacity: 0.62; }
+.card-unit[data-state="firing"] .card-state { color: var(--crate); }
+.card-unit[data-state="moving"] .card-state { color: var(--parchment-dim); }
+
+/* -- the selected formation's numbers ------------------------------------ */
+
+.tray-stats {
+  display: flex;
+  gap: 0.85rem;
+  padding-left: 0.2rem;
+  border-left: 1px solid rgba(216, 180, 73, 0.2);
+  padding-inline-start: 0.85rem;
+}
+
+.stat { display: flex; flex-direction: column; gap: 0.05rem; }
+
+.stat-label {
+  font-family: var(--util);
+  font-size: 0.6rem;
+  font-weight: 300;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--parchment-faint);
+}
+
+.stat strong {
+  font-family: var(--util);
+  font-size: 0.86rem;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  color: var(--parchment);
+}
+
+/* Grade as pips: three marks, filled to the grade held. */
+.pips { display: inline-flex; gap: 0.16rem; }
+.pips i {
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 50%;
+  background: rgba(241, 236, 224, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.5);
+}
+.pips i[data-lit="1"] { background: var(--gilt); }
+
+
+/* -- the works menu ------------------------------------------------------ */
+
+.works-menu {
+  display: grid;
+  gap: 1px;
+  margin: 0 0.55rem 0.5rem;
+  background: rgba(216, 180, 73, 0.18);
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.22s ease;
+}
+
+.works-menu[data-open="1"] { max-height: 26rem; }
+
+.work-btn {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  padding: 0.4rem 0.55rem 0.45rem;
+  text-align: left;
+  background: var(--steel-deep);
+  border: 0;
+  cursor: pointer;
+}
+
+.work-btn:hover { background: var(--steel); }
+.work-btn[data-on="1"] { background: linear-gradient(180deg, rgba(216, 180, 73, 0.22) 0, rgba(216, 180, 73, 0.08) 100%); }
+.work-btn[data-on="1"] .work-top strong { color: var(--gilt); }
+
+.work-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.work-top strong {
+  font-family: var(--util);
+  font-size: 0.82rem;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  color: var(--parchment);
+}
+
+.work-cost {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.22rem;
+  font-family: var(--util);
+  font-size: 0.76rem;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--crate);
+}
+
+.work-cost .ico { width: 0.85rem; height: 0.85rem; }
+
+.work-wants {
+  font-family: var(--body);
+  font-size: 0.72rem;
+  line-height: 1.25;
+  color: var(--parchment-faint);
+}
+
+
+/* -- controls: everything that holds a value is cut into the plate -------- */
+
+/*
+ * The panels were carrying browser form controls with a dotted underline. A
+ * select that still looks like a select, a stock white tick-box and a native
+ * range slider read as a web form dropped onto a battlefield, which is exactly
+ * what they were. These are the same controls re-skinned as instrument parts:
+ * values sit in engraved wells, choosers carry a brass caret, and the tick-box
+ * is a stud that fills when it is set.
+ */
+
+.num {
+  appearance: none;
+  border: 0;
+  border-radius: 1px;
+  background: var(--steel-deep);
+  box-shadow: var(--well);
+  color: var(--crate);
+  font-family: var(--util);
+  font-weight: 400;
+  padding: 0.16rem 0.4rem;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.6);
+}
+
+.num:hover { color: var(--parchment); }
+.num:focus-visible {
+  outline: none;
+  box-shadow: var(--well), 0 0 0 1px var(--gilt);
+}
+
+/* The tick-box: a brass stud, struck when set. */
+input[type="checkbox"] {
+  appearance: none;
+  width: 0.95rem;
+  height: 0.95rem;
+  border-radius: 1px;
+  background: var(--steel-deep);
+  box-shadow: var(--well);
+  cursor: pointer;
+  position: relative;
+  flex: 0 0 auto;
+}
+
+input[type="checkbox"]:checked {
+  background: linear-gradient(178deg, #f0d489 0, var(--gilt) 44%, #a8862c 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 252, 232, 0.5), inset 0 -1px 0 rgba(0, 0, 0, 0.35);
+}
+
+input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  inset: 0.18rem 0.22rem 0.28rem;
+  border-left: 2px solid rgba(9, 11, 15, 0.85);
+  border-bottom: 2px solid rgba(9, 11, 15, 0.85);
+  transform: rotate(-45deg);
+}
+
+input[type="checkbox"]:focus-visible { outline: none; box-shadow: var(--well), 0 0 0 1px var(--gilt); }
+
+/* The slider: a brass thumb in a cut channel. */
+.knob input[type="range"] {
+  appearance: none;
+  width: 6.5rem;
+  height: 0.95rem;
+  background: transparent;
+  cursor: pointer;
+}
+
+.knob input[type="range"]::-webkit-slider-runnable-track {
+  height: 0.32rem;
+  border-radius: 1px;
+  background: var(--steel-deep);
+  box-shadow: var(--well);
+}
+
+.knob input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 0.72rem;
+  height: 0.95rem;
+  margin-top: -0.32rem;
+  border-radius: 1px;
+  background: linear-gradient(178deg, #f0d489 0, var(--gilt) 46%, #8f7226 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 252, 232, 0.55), 0 1px 2px rgba(0, 0, 0, 0.65);
+}
+
+.knob input[type="range"]::-moz-range-track {
+  height: 0.32rem;
+  background: var(--steel-deep);
+  box-shadow: var(--well);
+}
+
+.knob input[type="range"]::-moz-range-thumb {
+  width: 0.72rem;
+  height: 0.95rem;
+  border: 0;
+  border-radius: 1px;
+  background: linear-gradient(178deg, #f0d489 0, var(--gilt) 46%, #8f7226 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 252, 232, 0.55), 0 1px 2px rgba(0, 0, 0, 0.65);
+}
+
+.knob-value { width: 3.4rem; }
+
+/* -- plates: a rim, and a nameplate with an ornament --------------------- */
+
+/*
+ * A panel was a dark rectangle with a faint gradient. These are plaques: a
+ * brass rim, a lit inner edge, and a header with a double rule and a struck
+ * diamond so the eye reads a made object rather than a div.
+ */
+.panel {
+  box-shadow:
+    var(--edge),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.55),
+    inset 0 0 0 2px rgba(216, 180, 73, 0.1);
+}
+
+.panel-head { position: relative; padding-bottom: 0.6rem; }
+
+.panel-head::after {
+  content: "";
+  position: absolute;
+  left: 0.8rem;
+  right: 0.8rem;
+  bottom: 0.16rem;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(216, 180, 73, 0.28) 12%, rgba(216, 180, 73, 0.28) 88%, transparent);
+}
+
+.panel-head h2 { position: relative; padding-left: 0.72rem; }
+
+.panel-head h2::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 0.32rem;
+  height: 0.32rem;
+  margin-top: -0.16rem;
+  background: var(--gilt);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
+  transform: rotate(45deg);
+}
+
+/* The order book took three fifths of the rail whether it had three rules in
+   it or none, leaving a hand-span of empty plate under them. It takes what it
+   needs; the dispatches get the rest. */
+.rail.right > .book { flex: 0 1 auto; max-height: 62%; }
+.rail.right > .dispatches { flex: 1 1 auto; min-height: 9rem; }
+
+/* -- the returns, as an instrument -------------------------------------- */
+
+/* A scale with an engraved channel and a brass centre mark, not a web
+   progress bar in two colours. */
+.scale {
+  position: relative;
+  height: 0.52rem;
+  border-radius: 1px;
+  background: var(--steel-deep);
+  box-shadow: var(--well);
+}
+
+.scale::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -0.16rem;
+  bottom: -0.16rem;
+  width: 1px;
+  background: rgba(216, 180, 73, 0.55);
+}
+
+.scale i:first-child { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22); }
+.scale i:last-child { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18); }
+
+/* -- the field-size choice ---------------------------------------------- */
+
+.choice-note {
+  display: block;
+  margin-top: 0.1rem;
+  font-family: var(--util);
+  font-size: 0.6rem;
+  font-weight: 300;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--parchment-faint);
+}
+
+.choice[data-on="1"] .choice-note { color: rgba(9, 11, 15, 0.7); }

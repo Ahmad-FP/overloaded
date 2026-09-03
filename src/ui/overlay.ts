@@ -1,4 +1,4 @@
-import { MAIN_SIGHT_TILES, SIGHT_TILES, TILE_M } from "../domain/constants";
+import { MAIN_SIGHT_TILES, SIGHT_TILES, TILE_M, type WorkKind } from "../domain/constants";
 import type { Match } from "../domain/match";
 import { heightAt } from "../domain/terrain";
 import type { Binding, Cell, Owner, Structure, Unit, UnitType } from "../domain/types";
@@ -31,8 +31,8 @@ const NEUTRAL = { ink: "#8a7a52", wash: "rgba(150,132,86,0.05)", light: "#d3c08a
 // the army has not walked past makes a 56-tile field look like a small
 // rectangle floating in the dark, so the land shows faintly through and the
 // player can see the shape of the country they have yet to scout.
-const UNSEEN = "rgba(15,16,19,0.76)";
-const SHADE = "rgba(15,16,19,0.3)";
+const UNSEEN = "rgba(15,16,19,0.58)";
+const SHADE = "rgba(15,16,19,0.24)";
 /** How far the fog frontier is feathered, in veil pixels. */
 const FEATHER = 5;
 
@@ -59,8 +59,22 @@ export class Overlay {
   hover: Cell | null = null;
   marquee: Marquee | null = null;
   selection = new Set<string>();
+  /** The base the player has clicked, whose detail the tray is showing. */
+  work: string | null = null;
   /** Set while the player is siting a redoubt. */
-  placing = false;
+  /** The work the player is siting, or null when not building. */
+  placing: WorkKind | null = null;
+  /** True while the player is marking the ground a standing order aims at. */
+  marking = false;
+  /**
+   * Held-key order overlay.
+   *
+   * Total War hangs every unit's destination and path off one held key rather
+   * than spending permanent screen on it, which is the right trade: the
+   * information is wanted for two seconds at a time, in bulk, and never while
+   * you are reading anything else.
+   */
+  showPaths = false;
 
   private vision: Vision | null = null;
   private visionKey = "";
@@ -144,7 +158,7 @@ export class Overlay {
 
     const claims = [...match.structures.values()].filter((s) => s.side !== "neutral");
     for (const claim of claims) {
-      const reach = claim.kind === "main" ? 13 : claim.kind === "fob" ? 9 : 6;
+      const reach = claim.kind === "main" ? 13 : claim.kind === "fort" ? 9 : claim.kind === "depot" ? 6 : 7;
       const mark = claim.side === "player" ? 1 : -1;
       const r = Math.ceil(reach);
       for (let y = claim.cell.y - r; y <= claim.cell.y + r; y += 1) {
@@ -162,6 +176,11 @@ export class Overlay {
     this.vision = vision;
     this.visionTurn += 1;
     return true;
+  }
+
+  /** What the player has uncovered, for the minimap to shade. */
+  known(): { explored: Uint8Array; owner: Int8Array } | null {
+    return this.vision;
   }
 
   canSee(match: Match, unit: Unit) {
@@ -326,8 +345,10 @@ export class Overlay {
   }
 
   private drawOrders(ctx: CanvasRenderingContext2D, match: Match) {
-    for (const name of this.selection) {
-      const binding = match.bindingByName(name);
+    const shown = this.showPaths
+      ? [...match.bindings.values()].filter((binding) => binding.side === "player")
+      : [...this.selection].map((name) => match.bindingByName(name));
+    for (const binding of shown) {
       if (!binding) continue;
       const centre = this.centreOf(match, binding);
       const goal = binding.order.cells[0];
@@ -388,7 +409,7 @@ export class Overlay {
   private drawCursor(ctx: CanvasRenderingContext2D, match: Match) {
     const cell = this.hover;
     if (!cell) return;
-    const legal = this.placing ? match.canBuildFob("player", cell).ok : true;
+    const legal = this.placing ? match.canBuild("player", this.placing, cell).ok : true;
     const corners = [[0, 0], [1, 0], [1, 1], [0, 1]] as const;
     ctx.beginPath();
     corners.forEach(([dx, dy], i) => {
@@ -398,14 +419,16 @@ export class Overlay {
       if (i === 0) ctx.moveTo(at.x, at.y); else ctx.lineTo(at.x, at.y);
     });
     ctx.closePath();
-    if (this.placing) {
-      ctx.fillStyle = legal ? "rgba(216,180,92,0.28)" : "rgba(196,87,74,0.3)";
+    if (this.placing || this.marking) {
+      ctx.fillStyle = this.marking
+        ? "rgba(216,180,92,0.2)"
+        : legal ? "rgba(216,180,92,0.28)" : "rgba(196,87,74,0.3)";
       ctx.fill();
     }
     ctx.strokeStyle = this.placing
       ? (legal ? "rgba(230,200,120,0.95)" : "rgba(220,110,96,0.95)")
-      : "rgba(238,228,200,0.4)";
-    ctx.lineWidth = this.placing ? 2 : 1.2;
+      : this.marking ? "rgba(230,200,120,0.95)" : "rgba(238,228,200,0.4)";
+    ctx.lineWidth = this.placing || this.marking ? 2 : 1.2;
     ctx.stroke();
   }
 

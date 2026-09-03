@@ -13,14 +13,14 @@ played by hand, by an agent, or by both at once.
 ## The game
 
 Crates are the only resource. Your headquarters produces them continuously, and
-so does every forward redoubt you build and every depot you capture. Income
+so does every fort you raise and every depot you capture. Income
 only arrives if a structure can trace a walkable route back to your
 headquarters, so parking a formation across that route stops the money without
 a shot being fired. Depots start neutral and change hands when someone stands
 on one long enough.
 
 Units belong to formations rather than being selected individually. A formation
-has a shape, a spacing, a facing and a standing order. Artillery limbers when
+has a shape, a spacing, a facing and its orders. Artillery limbers when
 it marches and cannot fire until it stops; round shot is solved for the
 elevation that reaches the target, so a battery has a minimum range as well as
 a maximum one.
@@ -30,36 +30,38 @@ your headquarters ends it early.
 
 ## Standing orders
 
-Rather than clicking every reaction, you write rules the game applies for you.
-A rule is an event, a subject, an actor and an action:
+Rather than clicking every reaction, you write orders the army carries out on
+its own. An order is written to one named formation or one named base, and it
+is set off by one named thing:
 
-> When **any formation** **comes under fire**, **the nearest reserve** will
-> **attack** at **the sighting**.
+> **Alpha** attacks **the attacker** when it comes under fire.
+> **Headquarters** raises **16 infantry** when the war chest passes 800 crates.
 
-There are twelve events — `spotted`, `under_fire`, `weakened`, `arrived`,
-`idle`, `threatened`, `supply_cut`, `supply_restored`, `captured`, `lost`,
-`destroyed`, `timer` — and ten actions: `move`, `hold`, `attack_area`,
-`bombard`, `charge`, `retreat`, `reserve`, `build_fob`, `recruit` and
-`alert_only`. The actor can be a named formation, a named structure, the
-subject itself, any formation, any structure, or whichever reserve is nearest.
-The action can be aimed at the event, the subject, the actor, or a fixed cell.
+Nothing in an order is a wildcard and nothing in it is ground you cannot point
+at. The thing being watched can be a formation, a base, or your own war chest.
+A formation reports `under_fire`, `spotted`, `weakened`, `arrived`, `idle` and
+`destroyed`; a base reports `threatened`, `supply_cut`, `supply_restored`,
+`captured`, `lost` and `destroyed`; the chest reports `supply_above`. A
+formation can be told to `move`, `hold`, `attack_area`, `retreat` or `reserve`,
+cavalry can `charge` and artillery can `bombard`; a base can `recruit`. The
+ground an order aims at is the attacker that set it off, a named formation, a
+named base, or a spot you mark on the map.
 
-Rules fire on the rising edge of their event and honour a cooldown, so
-`under_fire` triggers when a formation starts taking casualties rather than on
-every tick it keeps taking them.
+An order belongs to the thing it watches. There is no sweep and no interval:
+the instant that thing reports, its orders go out.
 
 ## Agent control
 
 The game registers its tools on `document.modelContext` at load. That works in
-ChatGPT's in-app browser, and in Chrome 149+ with
+ChatGPT's in-app browser, natively in Chrome 152, and in Chrome 149+ with
 `chrome://flags/#enable-webmcp-testing` enabled. If `document.modelContext` is
 absent the boot screen says so and the game plays normally.
 
 Formations are addressed by name, so instructions read like orders:
 
 > Call `overview`. Raise a battery at the headquarters and bind it as
-> `Battery`. Then add a rule: when any base loses its supply line, the nearest
-> reserve attacks the caller.
+> `Battery`. Then write Battery a standing order: it bombards the attacker
+> when it comes under fire.
 
 | Tool | Does |
 |---|---|
@@ -69,12 +71,12 @@ Formations are addressed by name, so instructions read like orders:
 | `inspect_cell` | Terrain, height, occupants and cover at a map cell |
 | `inspect_contact` | What is known about a sighted enemy formation |
 | `read_alerts` | The dispatch feed |
-| `list_rules` | The current order book |
+| `list_rules` | The standing orders, and the whole vocabulary for writing them |
 | `recruit` | Raise infantry, cavalry or artillery at a connected base |
-| `build_fob` | Site a forward redoubt |
+| `build_work` | Site a fort, barracks, stables, foundry or watchtower |
 | `bind`, `unbind`, `rename_binding` | Regroup and name formations |
-| `issue` | Give a formation a standing order |
-| `add_rule`, `update_rule`, `remove_rule` | Edit the order book |
+| `issue` | Give a formation its orders now |
+| `add_rule`, `update_rule`, `remove_rule` | Write, amend and strike standing orders |
 | `set_match`, `start_battle`, `set_paused` | Map, difficulty, clock |
 
 The seven inspection tools carry `readOnlyHint`, so an agent can survey the
@@ -111,8 +113,9 @@ Any static host will serve `dist` as-is.
 | <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or arrows | Pan. Middle-drag works too, and the wheel zooms |
 | <kbd>Q</kbd> <kbd>E</kbd> <kbd>R</kbd> <kbd>T</kbd> | March, hold, attack, bombard |
 | <kbd>F</kbd> <kbd>G</kbd> <kbd>C</kbd> | Charge, fall back, reserve |
-| <kbd>B</kbd> <kbd>Home</kbd> | Site a redoubt, centre on headquarters |
-| <kbd>Space</kbd> or <kbd>P</kbd> <kbd>M</kbd> | Pause, mute |
+| Hold <kbd>Space</kbd> | Show every formation's orders at once |
+| <kbd>B</kbd> <kbd>L</kbd> <kbd>Home</kbd> | Site a work, change the field lens, centre on headquarters |
+| <kbd>P</kbd> <kbd>M</kbd> | Pause, mute |
 | <kbd>1</kbd>-<kbd>4</kbd> | Game speed |
 | <kbd>Esc</kbd> | Cancel the pending order, then the selection |
 

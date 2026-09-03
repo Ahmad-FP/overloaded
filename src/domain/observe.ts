@@ -1,9 +1,10 @@
-import { FOB_COST, FOB_REACH_TILES, TILE_M } from "./constants";
-import { describeRule } from "./rules";
+import { WORKS, WORK_KINDS, WORK_REACH_TILES, TILE_M } from "./constants";
+import type { WorkKind } from "./constants";
+import { describeRule, type Naming } from "./rules";
 import { cellOf, terrainAt } from "./terrain";
 import { unitCost } from "./match";
 import type { Match } from "./match";
-import type { Cell, CommandResult, RuleTarget, Side } from "./types";
+import type { Cell, CommandResult, Side } from "./types";
 
 const terrainGlyph: Record<string, string> = {
   open: ".",
@@ -21,24 +22,22 @@ const countTypes = (types: string[]) =>
   }, {});
 
 /** How the rule book names a clause, for both the panel and the tool output. */
-export const targetLabel = (match: Match, target: RuleTarget) => {
-  switch (target.kind) {
-    case "binding":
-      return target.ref ?? "a formation";
-    case "structure":
-      return match.structures.get(target.ref ?? "")?.name ?? "a base";
-    case "self":
-      return "it";
-    case "any_binding":
-      return "any formation";
-    case "any_structure":
-      return "any base";
-    case "nearest_reserve":
-      return "the nearest reserve";
-    default:
-      return "someone";
-  }
+/** One letter per work on the ASCII map: upper case is theirs, lower yours. */
+const GLYPH: Record<string, string> = {
+  main: "H", depot: "D", fort: "F", barracks: "B", stables: "S", foundry: "Y", watchtower: "T",
 };
+
+const MAP_GLYPH = (structure: { kind: string; side: string }, mine: boolean) => {
+  const mark = GLYPH[structure.kind] ?? "?";
+  if (structure.side === "neutral") return "o";
+  return mine ? mark.toLowerCase() : mark;
+};
+
+/**
+ * What everything a standing order names is called. The match owns the words;
+ * this is the door the tools and the panels come in by.
+ */
+export const naming = (match: Match): Naming => match.naming();
 
 export const overview = (match: Match, side: Side = "player") => {
   const bindings = [...match.bindings.values()]
@@ -91,8 +90,8 @@ export const overview = (match: Match, side: Side = "player") => {
     incomePerMin: match.income[side],
     depotsHeld: match.held(side),
     prices: {
-      fob: FOB_COST,
-      fobReachTiles: FOB_REACH_TILES,
+      works: Object.fromEntries(WORK_KINDS.map((kind) => [kind, WORKS[kind].cost])) as Record<WorkKind, number>,
+      workReachTiles: WORK_REACH_TILES,
       infantry: unitCost("infantry", 2),
       cavalry: unitCost("cavalry", 2),
       artillery: unitCost("artillery", 2),
@@ -106,9 +105,8 @@ export const overview = (match: Match, side: Side = "player") => {
     contacts: match.contacts(side),
     rules: match.rules.filter((rule) => rule.side === side).map((rule) => ({
       id: rule.id,
-      name: rule.name,
       enabled: rule.enabled,
-      reads: describeRule(rule, (target) => targetLabel(match, target)),
+      reads: describeRule(rule, naming(match)),
       fired: rule.fired,
       cooldownLeft: Math.ceil(rule.cooldownLeft),
     })),
@@ -224,7 +222,7 @@ const asciiMap = (match: Match, side: Side) => {
   }
   for (const structure of match.structures.values()) {
     const mine = structure.side === side;
-    const glyph = structure.kind === "main" ? (mine ? "H" : "X") : structure.kind === "fob" ? (mine ? "f" : "F") : structure.side === "neutral" ? "o" : mine ? "d" : "D";
+    const glyph = MAP_GLYPH(structure, mine);
     for (let dy = 0; dy < structure.span; dy += 1) {
       for (let dx = 0; dx < structure.span; dx += 1) put({ x: structure.cell.x + dx, y: structure.cell.y + dy }, glyph);
     }

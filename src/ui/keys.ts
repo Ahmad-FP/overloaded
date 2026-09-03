@@ -22,6 +22,27 @@ export const ORDER_KEY: Record<OrderKind, string> = {
   reserve: "C",
 };
 
+export const ORDER_LABEL: Record<OrderKind, string> = {
+  move: "March",
+  hold: "Hold",
+  attack_area: "Attack",
+  bombard: "Bombard",
+  charge: "Charge",
+  retreat: "Fall back",
+  reserve: "Reserve",
+};
+
+/** The same orders as what a formation is doing right now, for its card. */
+export const ORDER_DOING: Record<OrderKind, string> = {
+  move: "marching",
+  hold: "holding",
+  attack_area: "attacking",
+  bombard: "bombarding",
+  charge: "charging",
+  retreat: "falling back",
+  reserve: "in reserve",
+};
+
 export const ORDER_BY_CODE: ReadonlyMap<string, OrderKind> = new Map(
   (Object.entries(ORDER_KEY) as Array<[OrderKind, string]>)
     .map(([order, key]) => [`Key${key}`, order]),
@@ -34,10 +55,13 @@ export const CONTROL_KEYS: ReadonlyArray<readonly [string, string]> = [
   ["Wheel", "Zoom"],
   ["Left-click", "Select a formation; drag for several"],
   ["Right-click", "Send the selection, or confirm a pending order"],
-  ["B", "Site a redoubt"],
+  ["Hold Space", "Show every formation's orders at once"],
+  ["B", "Site a work"],
+  ["L", "Change the field lens"],
+  ["Tab", "Go to the next formation standing idle"],
   ["Home", "Centre on headquarters"],
   ["1 2 3 4", "Game speed"],
-  ["Space or P", "Pause"],
+  ["P", "Pause"],
   ["M", "Mute"],
   ["Esc", "Cancel the pending order, then the selection"],
 ];

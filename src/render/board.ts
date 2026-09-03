@@ -29,7 +29,15 @@ import { kits } from "./models";
 
 const CAM_PITCH = 0.86;
 const ZOOM_MIN = 90;
-const ZOOM_MAX = 620;
+/**
+ * The floor on how far back the camera may be pulled.
+ *
+ * A fixed 620 did not reach: a field needs about 810 to fit at the old sizes
+ * and far more at the larger ones, so the player could never see the whole
+ * thing at once and a large field read as a small one seen through a keyhole.
+ * The real ceiling is now per-field -- see `zoomMax`.
+ */
+const ZOOM_FLOOR = 900;
 
 /**
  * How much larger than life the cast stands.
@@ -49,7 +57,10 @@ const SIDE_COLOUR: Record<Side | "neutral", number> = {
 type Slot = { mesh: InstancedMesh; team: InstancedMesh | null; used: number };
 type Prop = { x: number; z: number; spin: number; size: number };
 
-const CAP = { infantry: 420, cavalry: 200, artillery: 60, tree: 2600, house: 320, main: 4, fob: 40, depot: 24 } as const;
+export const CAP = {
+  infantry: 420, cavalry: 200, artillery: 60, tree: 2600, house: 320,
+  main: 4, fort: 40, barracks: 12, stables: 12, foundry: 12, watchtower: 24, depot: 24,
+} as const;
 
 export class Board {
   readonly canvas: HTMLCanvasElement;
@@ -57,6 +68,8 @@ export class Board {
   readonly scene = new Scene();
   readonly camera = new PerspectiveCamera(38, 1, 4, 2400);
 
+  /** How far back this field allows, set when the map is built. */
+  private zoomMax = ZOOM_FLOOR;
   /** Where the camera looks, in tiles, and how far back it sits, in metres. */
   target = { x: 0, y: 0 };
   distance = 300;
@@ -201,11 +214,20 @@ export class Board {
     this.scene.add(veil);
     this.veil = veil;
 
+    // The country beyond the field.
+    //
+    // Nearly black, this read as a hole in the world the moment the camera was
+    // allowed to pan past the edge. It is unmapped ground, so it takes the
+    // colour of the fogged chart and falls away into the same haze.
     const skirt = new PlaneGeometry(wide * 6, deep * 6, 1, 1);
     skirt.rotateX(-Math.PI / 2);
-    const table = new Mesh(skirt, new MeshLambertMaterial({ color: 0x241d14 }));
-    table.position.set(wide / 2, -3.2, deep / 2);
-    table.receiveShadow = true;
+    const table = new Mesh(skirt, new MeshLambertMaterial({ color: 0x453f28 }));
+    table.position.set(wide / 2, -3.6, deep / 2);
+    // No shadow: the plane runs far outside the sun's shadow camera, and
+    // everything beyond that frustum samples the map's edge and comes back
+    // fully shadowed -- which is what turned the country past the field into a
+    // flat black band.
+    table.receiveShadow = false;
     this.scene.add(table);
     this.table = table;
 
@@ -224,7 +246,37 @@ export class Board {
 
     this.buildCast();
     this.dressCountry(map);
-    this.target = { x: map.width / 2, y: map.height / 2 };
+    // Open on your own headquarters rather than the middle of the field: on
+    // anything past the design grid the centre is ground you have not seen and
+    // your army is off the edge of it. Pulled a little toward the middle so the
+    // first thing on screen is the ground you are about to march over.
+    const home = map.mainCells.player;
+    this.target = {
+      x: home.x + (map.width / 2 - home.x) * 0.3,
+      y: home.y + (map.height / 2 - home.y) * 0.3,
+    };
+    // Fog and the far plane have to reach across whatever field this is, or a
+    // grand map pulled fully back is a grey wall with a corner of ground in it.
+    this.zoomMax = Math.max(ZOOM_FLOOR, this.fitDistance(map) * 1.08);
+    this.camera.far = this.zoomMax * 2.8;
+    this.camera.updateProjectionMatrix();
+    this.scene.fog = new Fog(0x1a1611, this.zoomMax * 0.72, this.zoomMax * 1.8);
+    this.distance = Math.max(ZOOM_MIN, Math.min(this.zoomMax, this.fitDistance(map) * 0.64));
+  }
+
+  /**
+   * The distance at which the whole field just fits the frame.
+   *
+   * The opening view is a fraction of this rather than a fixed number of
+   * metres, so a field twice the size opens twice as far back and every map
+   * starts showing about the same share of itself.
+   */
+  private fitDistance(map: WorldMap) {
+    const spread = Math.tan((this.camera.fov * Math.PI) / 360);
+    const aspect = this.camera.aspect > 0.2 ? this.camera.aspect : 16 / 9;
+    const forWidth = (map.width * TILE_M) / (2 * aspect * spread);
+    const forHeight = (map.height * TILE_M * Math.sin(CAM_PITCH)) / (2 * spread);
+    return Math.max(forWidth, forHeight);
   }
 
   private buildCast() {
@@ -361,7 +413,7 @@ export class Board {
   }
 
   zoomBy(factor: number) {
-    this.distance = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, this.distance / factor));
+    this.distance = Math.max(ZOOM_MIN, Math.min(this.zoomMax, this.distance / factor));
   }
 
   get zoom() {
@@ -369,6 +421,12 @@ export class Board {
   }
 
   /** Roughly how much ground the frame covers, in tiles. */
+  /** The tile-space rectangle the camera currently covers, for the minimap. */
+  viewport() {
+    const reach = this.reach();
+    return { x: this.target.x, y: this.target.y, w: reach.x * 2, h: reach.y * 2 };
+  }
+
   private reach() {
     const half = Math.tan((this.camera.fov * Math.PI) / 360) * this.distance;
     return {
@@ -387,10 +445,18 @@ export class Board {
    */
   private clamp(map: WorldMap) {
     const reach = this.reach();
-    const marginX = Math.min(reach.x * 1.02, map.width / 2);
-    const marginY = Math.min(reach.y * 0.9, map.height / 2);
-    this.target.x = Math.max(marginX, Math.min(map.width - marginX, this.target.x));
-    this.target.y = Math.max(marginY - reach.y * 0.2, Math.min(map.height - marginY + reach.y * 0.3, this.target.y));
+    // Let the eye wander off the field a little.
+    //
+    // The focus used to be pinned inside the ground by a margin the size of the
+    // view, which meant that pulled back far enough that the view was wider
+    // than the map the two bounds crossed and the camera stopped panning
+    // altogether -- and the strip of field hidden under the left rail could
+    // never be brought out from behind it. Panning into the dark is cheap; not
+    // being able to look at your own corner of the map is not.
+    const padX = Math.max(10, Math.min(reach.x * 0.5, map.width * 0.35));
+    const padY = Math.max(10, Math.min(reach.y * 0.5, map.height * 0.35));
+    this.target.x = Math.max(-padX, Math.min(map.width + padX, this.target.x));
+    this.target.y = Math.max(-padY, Math.min(map.height + padY, this.target.y));
   }
 
   private aim(map: WorldMap) {
@@ -488,7 +554,7 @@ export class Board {
       // only current where you can still see it.
       if (!this.knows(map, x, z, "explored")) continue;
       // A headquarters should read as one at a glance, not as another cottage.
-      const grown = structure.kind === "main" ? 1.55 : structure.kind === "fob" ? 1.2 : 1.1;
+      const grown = structure.kind === "main" ? 1.55 : structure.kind === "fort" ? 1.2 : 1.1;
       const size = grown * (structure.build < 1 ? 0.55 + structure.build * 0.45 : 1);
       this.add(structure.kind, x, z, heightAt(map, x, z), 0, size, structure.side);
     }

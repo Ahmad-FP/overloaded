@@ -1,20 +1,31 @@
 import {
-  addRule, bindUnits, buildFob, inspectBinding, inspectCell, inspectContact, inspectStructure,
+  addRule, bindUnits, buildWork, inspectBinding, inspectCell, inspectContact, inspectStructure,
   issue, overview, readAlerts, recruit, removeRule, renameBinding, startBattle, unbind, updateRule,
 } from "../domain/commands";
-import {
-  ACTIONS, EVENTS, LOADS, MAP_IDS, ORDERS, PRIORITIES, SHAPES, TARGET_KINDS, UNIT_TYPES, WHERE,
+import { WORK_KINDS, WORKS,
+  ACTIONS, LOADS, MAP_IDS, ORDERS, PRIORITIES, SHAPES, TRIGGERS, UNIT_TYPES,
 } from "../domain/constants";
+import { FIELD_SIZES } from "../domain/maps";
 import type { Match } from "../domain/match";
-import { describeRule, EVENT_TEXT, ACTION_TEXT } from "../domain/rules";
-import { targetLabel } from "../domain/observe";
+import { ACTION_ORDER, describeRule, TRIGGER_TEXT } from "../domain/rules";
+import { naming } from "../domain/observe";
 import type {
-  Cell, Load, MapId, OrderKind, Priority, Quality, Rule, RuleTarget, Shape,
+  Cell, Load, MapId, OrderActor, OrderKind, OrderPlace, Priority, Quality, Rule, Shape, Watched,
 } from "../domain/types";
 
 type UnknownRecord = Record<string, unknown>;
 
-const json = (value: unknown) => JSON.stringify(value);
+/**
+ * Every tool answers in WebMCP's content envelope.
+ *
+ * The registration callback is typed `MaybePromise<unknown>`, so handing back a
+ * bare JSON string type-checks happily -- but the spec's own sample returns
+ * `{ content: [{ type: "text", text }] }`, and that is what a caller unpacks.
+ * The payload stays JSON so an agent gets structured data rather than prose.
+ */
+const json = (value: unknown) => ({
+  content: [{ type: "text", text: JSON.stringify(value) }],
+});
 const fail = (code: string, message: string, details?: unknown) =>
   json({ ok: false, error: { code, message, ...(details === undefined ? {} : { details }) } });
 const isRecord = (value: unknown): value is UnknownRecord =>
@@ -42,50 +53,66 @@ const cells = (value: unknown): Cell[] | undefined => {
 };
 
 /**
- * `{ kind, ref }`, and the shorthand of a bare name.
+ * A watch, an actor or a place, from either the object form or a bare name.
  *
- * A bare string is checked against the live structure ids first, so
- * `"base1"` names a base and `"Alpha"` names a formation without the caller
- * having to say which.
+ * A bare string is checked against the live structure ids first, so `"base1"`
+ * names a base and `"Alpha"` names a formation without the caller having to
+ * say which. Nothing here accepts a wildcard: every order names one thing.
  */
-const target = (match: Match, value: unknown): RuleTarget | undefined => {
+const watched = (match: Match, value: unknown): Watched | undefined => {
+  if (value === "chest") return { kind: "chest" };
   if (typeof value === "string") {
-    const kind = oneOf(TARGET_KINDS, value);
-    if (kind) return { kind };
-    return match.structures.has(value) ? { kind: "structure", ref: value } : { kind: "binding", ref: value };
+    return match.structures.has(value)
+      ? { kind: "structure", ref: value }
+      : { kind: "binding", ref: value };
   }
   if (!isRecord(value)) return undefined;
-  const kind = oneOf(TARGET_KINDS, value.kind);
-  if (!kind) return undefined;
+  if (value.kind === "chest") return { kind: "chest" };
   const ref = text(value.ref, 40);
-  if ((kind === "binding" || kind === "structure") && !ref) return undefined;
-  return ref ? { kind, ref } : { kind };
+  if (!ref) return undefined;
+  if (value.kind === "binding" || value.kind === "structure") return { kind: value.kind, ref };
+  return undefined;
+};
+
+const actorOf = (match: Match, value: unknown): OrderActor | undefined => {
+  const parsed = watched(match, value);
+  return parsed && parsed.kind !== "chest" ? parsed : undefined;
+};
+
+const placeOf = (match: Match, value: unknown): OrderPlace | null | undefined => {
+  if (value === null) return null;
+  if (value === "attacker") return { kind: "attacker" };
+  if (typeof value === "string") {
+    return match.structures.has(value)
+      ? { kind: "structure", ref: value }
+      : { kind: "binding", ref: value };
+  }
+  const at = cell(value);
+  return at ? { kind: "point", cell: at } : undefined;
 };
 
 const rulePatch = (match: Match, input: UnknownRecord): Partial<Rule> => {
   const patch: Partial<Rule> = {};
-  const name = text(input.name, 40);
-  if (name) patch.name = name;
   const enabled = bool(input.enabled);
   if (enabled !== undefined) patch.enabled = enabled;
-  if (input.subject !== undefined) {
-    const parsed = target(match, input.subject);
-    if (parsed) patch.subject = parsed;
+  if (input.watch !== undefined) {
+    const parsed = watched(match, input.watch);
+    if (parsed) patch.watch = parsed;
   }
   if (input.actor !== undefined) {
-    const parsed = target(match, input.actor);
+    const parsed = actorOf(match, input.actor);
     if (parsed) patch.actor = parsed;
   }
-  const event = oneOf(EVENTS, input.event);
-  if (event) patch.event = event;
+  if (input.place !== undefined) {
+    const parsed = placeOf(match, input.place);
+    if (parsed !== undefined) patch.place = parsed;
+  }
+  const trigger = oneOf(TRIGGERS, input.trigger);
+  if (trigger) patch.trigger = trigger;
   const action = oneOf(ACTIONS, input.action);
   if (action) patch.action = action;
-  const where = oneOf(WHERE, input.where);
-  if (where) patch.where = where;
   const threshold = num(input.threshold);
   if (threshold !== undefined) patch.threshold = threshold;
-  const parsedCells = cells(input.cells);
-  if (parsedCells) patch.cells = parsedCells;
   const unitType = oneOf(UNIT_TYPES, input.unitType);
   if (unitType) patch.unitType = unitType;
   const count = num(input.count);
@@ -111,14 +138,39 @@ const wrap = <T>(result: { ok: true; data: T } | { ok: false; error: { code: str
 
 const empty = { type: "object", additionalProperties: false, properties: {} };
 
-const TARGET_SCHEMA = {
-  description: "Either a shorthand string — a binding name like \"Alpha\", a structure id like \"s3\", or one of "
-    + TARGET_KINDS.join(", ") + " — or an object { kind, ref }.",
+const WATCH_SCHEMA = {
+  description: "What the order is written against, and it must be one named thing: a formation name like \"Alpha\", "
+    + "a structure id like \"base1\", or \"chest\" for your own war chest. There is no wildcard.",
   anyOf: [
     { type: "string" },
     {
       type: "object", additionalProperties: false, required: ["kind"],
-      properties: { kind: { enum: [...TARGET_KINDS] }, ref: { type: "string" } },
+      properties: { kind: { enum: ["binding", "structure", "chest"] }, ref: { type: "string" } },
+    },
+  ],
+};
+
+const ACTOR_SCHEMA = {
+  description: "Who carries the order out: a formation name like \"Alpha\", or a structure id like \"base1\" "
+    + "(a base can only raise men).",
+  anyOf: [
+    { type: "string" },
+    {
+      type: "object", additionalProperties: false, required: ["kind", "ref"],
+      properties: { kind: { enum: ["binding", "structure"] }, ref: { type: "string" } },
+    },
+  ],
+};
+
+const PLACE_SCHEMA = {
+  description: "The ground the order aims at, always named: \"attacker\" for the enemy that set the watch off "
+    + "(only for under_fire, spotted and threatened), a formation name, a structure id, or { x, y } for a "
+    + "marked spot. Orders that go nowhere -- fall back, stand in reserve, raise men -- take no place.",
+  anyOf: [
+    { type: "string" },
+    {
+      type: "object", additionalProperties: false, required: ["x", "y"],
+      properties: { x: { type: "integer" }, y: { type: "integer" } },
     },
   ],
 };
@@ -170,7 +222,7 @@ export const createTools = (match: Match): WebMCP.ModelContextTool[] => [
     (input) => {
       const at = cell(input);
       if (!at) return fail("invalid_input", "x and y must be integers on the map.");
-      return json({ ok: true, data: inspectCell(match, at) });
+      return wrap(inspectCell(match, at));
     }, { readOnlyHint: true }),
 
   tool("inspect_contact", "Inspect a contact",
@@ -179,7 +231,7 @@ export const createTools = (match: Match): WebMCP.ModelContextTool[] => [
     (input) => {
       const id = text(input.id, 24);
       if (!id) return fail("invalid_input", "id is required.");
-      return json({ ok: true, data: inspectContact(match, id) });
+      return wrap(inspectContact(match, id));
     }, { readOnlyHint: true }),
 
   tool("read_alerts", "Read dispatches",
@@ -188,7 +240,7 @@ export const createTools = (match: Match): WebMCP.ModelContextTool[] => [
       type: "object", additionalProperties: false,
       properties: { limit: { type: "integer", minimum: 1, maximum: 60 } },
     },
-    (input) => json({ ok: true, data: readAlerts(match, "player", num(input.limit) ?? 20) }),
+    (input) => wrap(readAlerts(match, "player", num(input.limit) ?? 20)),
     { readOnlyHint: true }),
 
   tool("list_rules", "Read the order book",
@@ -196,21 +248,20 @@ export const createTools = (match: Match): WebMCP.ModelContextTool[] => [
     empty,
     (input) => {
       if (Object.keys(input).length) return fail("invalid_input", "list_rules takes no parameters.");
-      const label = (item: RuleTarget) => targetLabel(match, item);
+      const name = naming(match);
       return json({
         ok: true,
         data: {
           vocabulary: {
-            events: EVENTS.map((event) => ({ event, reads: EVENT_TEXT[event] })),
-            actions: ACTIONS.map((action) => ({ action, reads: ACTION_TEXT[action] })),
-            where: [...WHERE],
-            targets: [...TARGET_KINDS],
+            triggers: TRIGGERS.map((trigger) => ({ trigger, reads: TRIGGER_TEXT[trigger] })),
+            actions: ACTIONS.map((action) => ({ action, reads: ACTION_ORDER[action] })),
+            watchable: "one named formation, one structure id, or \"chest\"",
+            places: "\"attacker\", a formation name, a structure id, or { x, y }",
           },
           rules: match.rules.filter((rule) => rule.side === "player").map((rule) => ({
             id: rule.id,
-            name: rule.name,
             enabled: rule.enabled,
-            reads: describeRule(rule, label),
+            reads: describeRule(rule, name),
             fired: rule.fired,
             cooldownLeft: Math.round(rule.cooldownLeft * 10) / 10,
           })),
@@ -224,6 +275,10 @@ export const createTools = (match: Match): WebMCP.ModelContextTool[] => [
       type: "object", additionalProperties: false,
       properties: {
         mapId: { enum: [...MAP_IDS] },
+        mapArea: {
+          enum: FIELD_SIZES.map((size) => size.area),
+          description: "How much ground: 1 compact, 2 standard, 5 grand.",
+        },
         timeLimitS: { type: "integer", minimum: 120, maximum: 3600 },
         difficulty: { type: "integer", minimum: 1, maximum: 3 },
       },
@@ -232,6 +287,7 @@ export const createTools = (match: Match): WebMCP.ModelContextTool[] => [
       const difficulty = quality(input.difficulty);
       return wrap(match.setSettings({
         mapId: oneOf(MAP_IDS, input.mapId) as MapId | undefined,
+        mapArea: num(input.mapArea),
         timeLimitS: num(input.timeLimitS),
         difficulty,
       }));
@@ -273,17 +329,25 @@ export const createTools = (match: Match): WebMCP.ModelContextTool[] => [
       return wrap(recruit(match, structureId, type, Math.round(count), quality(input.grade) ?? 2));
     }, { readOnlyHint: false }),
 
-  tool("build_fob", "Raise a redoubt",
-    "Put a forward work on a cell. It must sit within reach of your existing network, clear of other works, "
-    + "and on ground the enemy does not interdict. It extends supply and pays a small yield of its own.",
+  tool("build_work", "Raise a work",
+    "Put a work on a cell. It must sit within reach of your existing network, clear of other works, and on "
+    + "ground the enemy does not interdict. Each kind wants particular ground beside it and is stronger or "
+    + "faster when it gets it: "
+    + WORK_KINDS.map((kind) => `${kind} (${WORKS[kind].cost} crates, ${WORKS[kind].wants.label.toLowerCase()})`).join("; ")
+    + ". Call inspect_cell first if you are unsure what is on the ground.",
     {
-      type: "object", additionalProperties: false, required: ["x", "y"],
-      properties: { x: { type: "integer" }, y: { type: "integer" } },
+      type: "object", additionalProperties: false, required: ["kind", "x", "y"],
+      properties: {
+        kind: { enum: [...WORK_KINDS], description: "Which work to raise." },
+        x: { type: "integer" }, y: { type: "integer" },
+      },
     },
     (input) => {
       const at = cell(input);
       if (!at) return fail("invalid_input", "x and y must be integers on the map.");
-      return wrap(buildFob(match, at));
+      const kind = WORK_KINDS.find((option) => option === input.kind);
+      if (!kind) return fail("invalid_input", `kind must be one of ${WORK_KINDS.join(", ")}.`);
+      return wrap(buildWork(match, kind, at));
     }, { readOnlyHint: false }),
 
   tool("issue", "Order a formation",
@@ -362,50 +426,49 @@ export const createTools = (match: Match): WebMCP.ModelContextTool[] => [
     }, { readOnlyHint: false }),
 
   tool("add_rule", "Write a standing order",
-    "The heart of the game. A rule reads: WHEN <event> happens to <subject>, <actor> performs <action> at <where>. "
-    + "The actor may be the subject itself (\"self\"), a named formation, a base, or \"nearest_reserve\" — whichever "
-    + "idle formation is closest. Rules run without you and never need a second call. "
-    + "Use list_rules for the full vocabulary and what each word means.",
+    "The heart of the game. An order is written to one named formation or one named base and set off by one "
+    + "named thing: \"Alpha attacks the attacker when it comes under fire\", \"Headquarters raises 16 infantry "
+    + "when the war chest passes 800 crates\". Nothing in an order is a wildcard and every place it names is a "
+    + "place you can point at. It then acts on its own, for the rest of the battle, with no second call. "
+    + "Use list_rules for the vocabulary.",
     {
-      type: "object", additionalProperties: false, required: ["event"],
+      type: "object", additionalProperties: false, required: ["watch", "trigger", "actor", "action"],
       properties: {
-        name: { type: "string", maxLength: 40, description: "What this line is for, in your own words." },
-        subject: TARGET_SCHEMA,
-        event: { enum: [...EVENTS] },
-        threshold: { type: "number", description: "For 'weakened' a percentage of establishment; for 'timer' a count of seconds; for 'idle' seconds idle." },
-        actor: TARGET_SCHEMA,
-        action: { enum: [...ACTIONS] },
-        where: { enum: [...WHERE], description: "Which cell the action aims at." },
-        cells: CELLS_SCHEMA,
+        watch: WATCH_SCHEMA,
+        trigger: { enum: [...TRIGGERS], description: "What the watched thing has to do. A formation reports under_fire, spotted, weakened, arrived, idle, destroyed; a base reports threatened, supply_cut, supply_restored, captured, lost, destroyed; the chest reports supply_above." },
+        threshold: { type: "number", description: "For 'weakened' a percentage of establishment, so 45 or 0.45 both mean forty-five percent; for 'supply_above' a number of crates." },
+        actor: ACTOR_SCHEMA,
+        action: { enum: [...ACTIONS], description: "A formation can march, hold, attack, retreat or stand in reserve; only cavalry can charge and only artillery can bombard; only a base can recruit." },
+        place: PLACE_SCHEMA,
         unitType: { enum: [...UNIT_TYPES], description: "For the recruit action." },
         count: { type: "integer", minimum: 1, maximum: 60, description: "For the recruit action." },
-        once: { type: "boolean", description: "Retire the line after it acts once." },
+        once: { type: "boolean", description: "Retire the order after it acts once." },
         cooldownS: { type: "number", minimum: 0, maximum: 600, description: "Seconds before it may act again." },
       },
     },
     (input) => {
-      if (!oneOf(EVENTS, input.event)) return fail("invalid_input", `event must be one of ${EVENTS.join(", ")}.`);
-      const result = addRule(match, rulePatch(match, input));
+      if (!oneOf(TRIGGERS, input.trigger)) return fail("invalid_input", `trigger must be one of ${TRIGGERS.join(", ")}.`);
+      const patch = rulePatch(match, input);
+      if (!patch.watch) return fail("invalid_input", "watch must name one formation, one structure id, or \"chest\".");
+      if (!patch.actor) return fail("invalid_input", "actor must name one formation or one structure id.");
+      const result = addRule(match, patch);
       if (!result.ok) return wrap(result);
-      const label = (item: RuleTarget) => targetLabel(match, item);
-      return json({ ok: true, data: { id: result.data.id, reads: describeRule(result.data, label) } });
+      return json({ ok: true, data: { id: result.data.id, reads: describeRule(result.data, naming(match)) } });
     }, { readOnlyHint: false }),
 
   tool("update_rule", "Amend a standing order",
-    "Change any clause of a line already in the book. Only the fields you send are touched.",
+    "Change any part of an order already in the book. Only the fields you send are touched.",
     {
       type: "object", additionalProperties: false, required: ["id"],
       properties: {
         id: { type: "string" },
-        name: { type: "string", maxLength: 40 },
         enabled: { type: "boolean" },
-        subject: TARGET_SCHEMA,
-        event: { enum: [...EVENTS] },
+        watch: WATCH_SCHEMA,
+        trigger: { enum: [...TRIGGERS] },
         threshold: { type: "number" },
-        actor: TARGET_SCHEMA,
+        actor: ACTOR_SCHEMA,
         action: { enum: [...ACTIONS] },
-        where: { enum: [...WHERE] },
-        cells: CELLS_SCHEMA,
+        place: PLACE_SCHEMA,
         unitType: { enum: [...UNIT_TYPES] },
         count: { type: "integer", minimum: 1, maximum: 60 },
         once: { type: "boolean" },
@@ -417,8 +480,7 @@ export const createTools = (match: Match): WebMCP.ModelContextTool[] => [
       if (!id) return fail("invalid_input", "id is required.");
       const result = updateRule(match, id, rulePatch(match, input));
       if (!result.ok) return wrap(result);
-      const label = (item: RuleTarget) => targetLabel(match, item);
-      return json({ ok: true, data: { id: result.data.id, reads: describeRule(result.data, label) } });
+      return json({ ok: true, data: { id: result.data.id, reads: describeRule(result.data, naming(match)) } });
     }, { readOnlyHint: false }),
 
   tool("remove_rule", "Strike a standing order", "Take a line out of the book.",

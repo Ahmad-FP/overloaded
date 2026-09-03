@@ -9,10 +9,11 @@ import type { Match } from "../domain/match";
  *
  * So it teaches the way Civilization's advisor does. One card at a time, in
  * the order the player will actually need it, each one retiring itself the
- * moment the player does the thing -- or when they dismiss it. What is
- * finished is remembered between sessions, so a returning player is never
- * taught to click a banner again, and the whole thing can be switched off
- * from the title screen or from the card itself.
+ * moment the player does the thing -- or when they dismiss it.
+ *
+ * It only runs when the player picks Tutorial from the title screen, so there
+ * is nothing to remember between sessions and nothing to persist: choosing
+ * Tutorial is the switch. A player who wants out mid-battle dismisses it.
  */
 
 type Field = { match: Match; selection: Set<string> };
@@ -60,33 +61,15 @@ const LESSONS: readonly Lesson[] = [
   {
     id: "rules",
     title: "Standing orders",
-    body: "Write a rule in the order book and the army answers it for you, without waiting to be told.",
+    body: "Pick a formation and write it a standing order. It watches for what you told it to watch for, and acts without waiting to be told.",
   },
 ];
-
-const DONE_KEY = "overloaded.taught";
-const OFF_KEY = "overloaded.tips-off";
-
-const load = (key: string) => {
-  try {
-    return window.localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-};
-
-const save = (key: string, value: string) => {
-  try {
-    window.localStorage.setItem(key, value);
-  } catch {
-    // Private browsing, or storage denied. Teaching just will not persist.
-  }
-};
 
 export class Coach {
   readonly root = document.createElement("aside");
   private done = new Set<string>();
-  private off = load(OFF_KEY) === "1";
+  /** Silent until the Tutorial entry turns it on. */
+  private off = true;
   private showing: string | null = null;
   private card = document.createElement("div");
 
@@ -95,17 +78,10 @@ export class Coach {
     this.root.dataset.on = "0";
     this.card.className = "coach-card";
     this.root.append(this.card);
-    const stored = load(DONE_KEY);
-    if (stored) for (const id of stored.split(",")) this.done.add(id);
-  }
-
-  get silenced() {
-    return this.off;
   }
 
   setOff(off: boolean) {
     this.off = off;
-    save(OFF_KEY, off ? "1" : "0");
     if (off) this.hide();
   }
 
@@ -113,14 +89,12 @@ export class Coach {
   mark(id: string) {
     if (this.done.has(id)) return;
     this.done.add(id);
-    save(DONE_KEY, [...this.done].join(","));
     if (this.showing === id) this.hide();
   }
 
   /** Wipe the record, so the next match teaches from the top again. */
   reset() {
     this.done.clear();
-    save(DONE_KEY, "");
     this.hide();
   }
 
