@@ -715,16 +715,40 @@ input[type="checkbox"] { accent-color: var(--gilt); margin: 0; }
   place-items: center;
   padding: 1.5rem;
   overflow-y: auto;
-  background:
-    radial-gradient(120% 90% at 50% 0%, rgba(60, 48, 30, 0.55), transparent 70%),
-    linear-gradient(180deg, #14110c, #0b0908);
+  background: var(--ink);
 }
+
+/* The title render sits behind the card, darkened enough to read type over. */
+.hero {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  z-index: 0;
+}
+
+.screen::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    linear-gradient(100deg, rgba(9, 11, 15, 0.9) 0%, rgba(9, 11, 15, 0.62) 38%, rgba(9, 11, 15, 0.12) 68%),
+    linear-gradient(0deg, rgba(9, 11, 15, 0.7), transparent 45%);
+}
+
+.screen > .card { position: relative; z-index: 2; }
+.screen.result { background: var(--ink); }
 
 .screen[data-on="1"] { display: grid; }
 
 .card {
-  width: min(46rem, 100%);
-  padding: 2.2rem 2.4rem 2rem;
+  width: min(38rem, 100%);
+  justify-self: start;
+  margin-inline-start: clamp(0rem, 6vw, 6rem);
+  padding: 2rem 2.2rem 1.8rem;
   background: var(--plate);
   box-shadow: var(--edge);
   clip-path: var(--cut);
@@ -733,7 +757,42 @@ input[type="checkbox"] { accent-color: var(--gilt); margin: 0; }
   gap: 1.3rem;
 }
 
-.card.narrow { width: min(30rem, 100%); text-align: center; align-items: center; }
+.card.narrow {
+  width: min(30rem, 100%);
+  justify-self: center;
+  margin-inline-start: 0;
+  text-align: center;
+  align-items: center;
+}
+
+/* Map picker: a row of previews, chosen by eye. */
+.map-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  align-items: stretch;
+  padding: 0.45rem;
+}
+
+.map-choice .thumb {
+  display: block;
+  overflow: hidden;
+  border: 1px solid rgba(216, 180, 73, 0.22);
+  background: var(--steel-deep);
+  line-height: 0;
+  aspect-ratio: 3 / 2;
+}
+
+.map-choice .thumb canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  image-rendering: auto;
+}
+
+.map-choice[data-on="1"] .thumb { border-color: rgba(216, 180, 73, 0.7); }
+.map-choice strong { font-size: 0.9rem; letter-spacing: 0.02em; min-height: 2.3em; }
 
 .card-head { display: flex; flex-direction: column; gap: 0.5rem; }
 
@@ -750,10 +809,10 @@ input[type="checkbox"] { accent-color: var(--gilt); margin: 0; }
 .wordmark {
   margin: 0;
   font-family: var(--display);
-  font-size: clamp(2.6rem, 8vw, 4.4rem);
+  font-size: clamp(2.1rem, 6.4vw, 3.9rem);
   font-weight: 700;
-  line-height: 0.94;
-  letter-spacing: 0.06em;
+  line-height: 0.96;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   text-wrap: balance;
   background: linear-gradient(178deg, #f4e6bd 8%, var(--gilt) 52%, #8a6f1d);
@@ -785,6 +844,7 @@ input[type="checkbox"] { accent-color: var(--gilt); margin: 0; }
 
 .choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 0.4rem; }
 .choices.tight { grid-template-columns: repeat(auto-fit, minmax(5.5rem, 1fr)); }
+.choices.maps { grid-template-columns: repeat(2, 1fr); gap: 0.55rem; }
 
 .choice {
   display: flex;
@@ -927,3 +987,96 @@ input[type="checkbox"] { accent-color: var(--gilt); margin: 0; }
   .knobs { width: 100%; }
   .card { padding: 1.5rem 1.3rem; }
 }
+
+/* Shortcut chips on the order buttons: the key lives on the control, so the
+   tray teaches itself instead of leaning on a paragraph of instructions. */
+.verb .key {
+  margin-inline-start: 0.4rem;
+  padding: 0.05rem 0.28rem;
+  border: 1px solid rgba(216, 180, 73, 0.28);
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.35);
+  font-family: var(--util);
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  color: var(--parchment-faint);
+  vertical-align: 1px;
+}
+
+.verb[data-on="1"] .key { border-color: rgba(216, 180, 73, 0.55); color: var(--gilt); }
+
+/* The tutorial card.
+   Top-centre, clear of the buy panel on the left, the order book on the right
+   and the tray at the foot. One card at a time, and it leaves when it is
+   done -- so it can afford to be the brightest thing on the board. */
+.coach {
+  position: absolute;
+  top: 3.9rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  width: min(27rem, calc(100vw - 2rem));
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.coach[data-on="1"] {
+  pointer-events: auto;
+  opacity: 1;
+}
+
+.coach[data-on="0"] { transform: translateX(-50%) translateY(-0.4rem); }
+
+.coach-card {
+  padding: 0.85rem 1rem 0.75rem;
+  background: var(--plate);
+  box-shadow: var(--edge);
+  clip-path: var(--cut);
+  border-top: 2px solid var(--gilt);
+}
+
+.coach-card h4 {
+  margin: 0 0 0.3rem;
+  font-family: var(--display);
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--gilt);
+}
+
+.coach-card p {
+  margin: 0 0 0.7rem;
+  font-size: 0.86rem;
+  line-height: 1.45;
+  color: var(--parchment-dim);
+}
+
+.coach-feet { display: flex; align-items: center; gap: 0.6rem; }
+
+.coach-got {
+  padding: 0.3rem 0.9rem;
+  border: 1px solid var(--gilt);
+  background: rgba(216, 180, 73, 0.14);
+  color: var(--gilt);
+  font-family: var(--util);
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.coach-got:hover { background: rgba(216, 180, 73, 0.26); }
+
+.coach-mute {
+  margin-inline-start: auto;
+  border: 0;
+  background: none;
+  padding: 0.3rem 0;
+  color: var(--parchment-faint);
+  font-family: var(--util);
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.coach-mute:hover { color: var(--parchment-dim); text-decoration: underline; }

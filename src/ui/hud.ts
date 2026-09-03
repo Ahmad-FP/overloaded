@@ -1,6 +1,7 @@
 import { FOB_COST, ORDERS, PRIORITIES, SHAPES, UNIT_TYPES } from "../domain/constants";
 import { unitCost, type Match } from "../domain/match";
 import type { Alert, Cell, OrderKind, Priority, Quality, Rule, Shape, Structure, UnitType } from "../domain/types";
+import { ORDER_KEY } from "./keys";
 import { RuleBook } from "./ruleBook";
 
 /**
@@ -272,7 +273,8 @@ export class Hud {
     this.tray.replaceChildren();
     if (!first) {
       this.tray.dataset.empty = "1";
-      this.tray.append(el("p", "hint", "Click a formation's banner to select it. Drag to select several. Right-click the ground to send them."));
+      // A state, not a lecture: the tutorial teaches selection once and retires.
+      this.tray.append(el("p", "hint", "No formation selected"));
       return;
     }
     this.tray.dataset.empty = "0";
@@ -286,6 +288,10 @@ export class Hud {
     const verbs = el("div", "verbs");
     for (const order of ORDERS) {
       const button = el("button", "verb", ORDER_LABEL[order]);
+      // Advertise the shortcut on the control itself rather than expecting it
+      // to be memorised from a wall of text.
+      button.append(el("span", "key", ORDER_KEY[order]));
+      button.title = `${ORDER_LABEL[order]} (${ORDER_KEY[order]})`;
       button.dataset.on = first.order.kind === order ? "1" : "0";
       button.addEventListener("click", () => this.handlers.order(order));
       verbs.append(button);

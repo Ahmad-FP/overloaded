@@ -10,6 +10,9 @@ import {
 import { Match } from "./domain/match";
 import type { Alert, Cell, EventKind, MapId, OrderKind, Rule } from "./domain/types";
 import { Board } from "./render/board";
+import { Hero } from "./render/hero";
+import { Coach } from "./ui/coach";
+import { ORDER_BY_CODE } from "./ui/keys";
 import { Hud } from "./ui/hud";
 import { Overlay } from "./ui/overlay";
 import { Shell } from "./ui/shell";
@@ -66,6 +69,7 @@ const note = (text: string) => {
 const applyOrder = (kind: OrderKind, cells: Cell[]) => {
   const names = selected();
   if (!names.length) return;
+  coach.mark("order");
   for (const name of names) issue(match, name, { order: kind, cells });
   audio.play(kind === "retreat" ? "cancel" : "confirm");
 
@@ -74,6 +78,7 @@ const applyOrder = (kind: OrderKind, cells: Cell[]) => {
 const hud = new Hud(host, {
   recruit: (structureId, type, count, grade) => {
     report(recruit(match, structureId, type, count, grade), "recruit");
+    coach.mark("recruit");
   },
   beginBuild: () => {
     view.placing = !view.placing;
@@ -106,16 +111,31 @@ const hud = new Hud(host, {
   addRule: () => {
     const result = addRule(match, {});
     report(result, "stamp");
+    coach.mark("rules");
   },
   changeRule: (id, patch) => { updateRule(match, id, patch as Partial<Rule>); audio.play("click"); },
   removeRule: (id) => { removeRule(match, id); audio.play("cancel"); },
 });
 host.append(toast);
 
+const coach: Coach = new Coach((off) => {
+  shell.setTips(!off);
+  audio.play("close");
+});
+host.append(coach.root);
+
 const shell = new Shell(host, {
   setMap: (id: MapId) => { match.setSettings({ mapId: id }); audio.play("click"); },
   setMinutes: (minutes) => { match.setSettings({ timeLimitS: minutes * 60 }); audio.play("click"); },
   setDifficulty: (difficulty) => { match.setSettings({ difficulty }); audio.play("click"); },
+  setTips: (on) => {
+    coach.setOff(!on);
+    // Turning it back on means the player wants teaching again, not a
+    // silent no-op because a previous session finished every lesson.
+    if (on) coach.reset();
+    shell.setTips(on);
+    audio.play("click");
+  },
   begin: () => {
     const result = startBattle(match);
     if (!result.ok) return audio.play("cancel");
@@ -282,11 +302,7 @@ window.addEventListener("keydown", (event) => {
   if (typing) return;
   held.add(event.code);
   if (match.phase !== "battle") return;
-  const verb: Partial<Record<string, OrderKind>> = {
-    KeyA: "attack_area", KeyH: "hold", KeyF: "retreat", KeyC: "charge",
-    KeyG: "bombard", KeyR: "reserve", KeyV: "move",
-  };
-  const wanted = verb[event.code];
+  const wanted = ORDER_BY_CODE.get(event.code);
   if (wanted) {
     event.preventDefault();
     if (NEEDS_CELL.has(wanted)) {
@@ -317,7 +333,7 @@ window.addEventListener("keydown", (event) => {
     else view.selection.clear();
     audio.play("cancel");
   }
-  if (event.code === "KeyE") {
+  if (event.code === "Home") {
     const mine = match.structuresOf("player");
     const main = mine.find((structure) => structure.kind === "main");
     if (main) board.centreOn(main.cell);
@@ -328,10 +344,18 @@ window.addEventListener("keydown", (event) => {
   }
 });
 
+// The title render is a still: it is drawn on resize and whenever the boot
+// screen comes back, and never on a frame loop.
+const hero = new Hero(shell.heroCanvas);
+const drawHero = () => hero.resize(window.innerWidth, window.innerHeight);
+drawHero();
+
 window.addEventListener("resize", () => {
   board.resize();
   view.resize();
+  if (match.phase !== "battle") drawHero();
 });
+shell.setTips(!coach.silenced);
 window.addEventListener("pointerdown", () => audio.unlock(), { once: true });
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) audio.suspend();
@@ -350,7 +374,7 @@ const bearing = (cell: Cell) => {
   return { distance: Math.hypot(dx, dy), pan: Math.max(-1, Math.min(1, dx / 26)) };
 };
 
-const soundOff = () => {
+const soundOff = (stamp: number) => {
   const fresh: Alert[] = [];
   for (const alert of match.alerts) {
     if (alert.id === seenAlert) break;
@@ -369,7 +393,6 @@ const soundOff = () => {
   // like one man: fold everything fired this frame into one report per kind,
   // heard from its centre and swelling with the number of muzzles.
   const volleys = new Map<string, { n: number; x: number; z: number }>();
-  const stamp = performance.now() / 1000;
   for (const shot of match.takeReports()) {
     view.flash(shot.x, shot.z, stamp);
     const cue = shot.kind === "musket" ? "volley" : "cannon";
@@ -421,21 +444,23 @@ const frame = (now: number) => {
     let py = 0;
     if (held.has("KeyW") || held.has("ArrowUp")) py -= panSpeed;
     if (held.has("KeyS") || held.has("ArrowDown")) py += panSpeed;
-    if (held.has("ArrowLeft")) px -= panSpeed;
-    if (held.has("ArrowRight")) px += panSpeed;
+    if (held.has("KeyA") || held.has("ArrowLeft")) px -= panSpeed;
+    if (held.has("KeyD") || held.has("ArrowRight")) px += panSpeed;
     if (px || py) board.panBy(px, py);
-    soundOff();
+    soundOff(now / 1000);
     view.think(match, now / 1000, dt);
     board.sync(match);
     board.render();
     view.draw(match, now / 1000);
     hud.update(match, view.selection);
+    coach.update(match, view.selection);
   }
 
   if (match.phase !== lastPhase) {
     lastPhase = match.phase;
     document.body.dataset.phase = match.phase;
     paint();
+    if (match.phase === "boot") drawHero();
   }
 
   if (noteTimer > 0) {

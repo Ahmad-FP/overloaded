@@ -37,6 +37,16 @@ const rgb = (hex: string): RGB => [
   parseInt(hex.slice(5, 7), 16),
 ];
 
+/** Flat tile colours, for the setup-screen map previews. */
+export const PREVIEW_TONE: Record<Terrain, RGB> = {
+  open: rgb("#93a659"),
+  road: rgb("#cbaa76"),
+  rough: rgb("#9a9a5b"),
+  woods: rgb("#4f6b3b"),
+  building: rgb("#a58a68"),
+  water: rgb("#3a7c93"),
+};
+
 const PALETTE: Record<Terrain, { base: RGB; high: RGB; low: RGB }> = {
   open: { base: rgb("#93a659"), high: rgb("#b3c274"), low: rgb("#6d8142") },
   road: { base: rgb("#cbaa76"), high: rgb("#e0c493"), low: rgb("#a9884f") },

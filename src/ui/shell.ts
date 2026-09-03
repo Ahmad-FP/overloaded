@@ -1,5 +1,6 @@
 import { MAP_IDS } from "../domain/constants";
 import { MAPS } from "../domain/maps";
+import { mapThumb } from "./mapThumb";
 import type { Match } from "../domain/match";
 import type { MapId } from "../domain/types";
 
@@ -12,16 +13,13 @@ export type ShellHandlers = {
   setMap: (id: MapId) => void;
   setMinutes: (minutes: number) => void;
   setDifficulty: (level: 1 | 2 | 3) => void;
+  setTips: (on: boolean) => void;
   begin: () => void;
   again: () => void;
 };
 
 const MINUTES = [10, 20, 35];
-const DIFFICULTY: Array<[1 | 2 | 3, string, string]> = [
-  [1, "Militia", "The enemy staff is slow and reacts late."],
-  [2, "Regular", "A staff that answers a cut supply line."],
-  [3, "Guard", "Reads the field every few seconds and raids."],
-];
+const DIFFICULTY: Array<[1 | 2 | 3, string]> = [[1, "Easy"], [2, "Medium"], [3, "Hard"]];
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string) => {
   const node = document.createElement(tag);
@@ -32,11 +30,14 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, t
 
 export class Shell {
   readonly root = el("div", "shell");
+  readonly heroCanvas = el("canvas", "hero");
   private boot = el("div", "screen boot");
   private result = el("div", "screen result");
-  private mapRow = el("div", "choices");
+  private mapRow = el("div", "choices maps");
   private timeRow = el("div", "choices tight");
-  private diffRow = el("div", "choices");
+  private diffRow = el("div", "choices tight");
+  private tipsRow = el("div", "choices tight");
+  private tipsOn = true;
   private status = el("p", "mcp");
   private resultTitle = el("h1");
   private resultLine = el("p", "verdict");
@@ -48,19 +49,18 @@ export class Shell {
   }
 
   private buildBoot() {
+    this.boot.append(this.heroCanvas);
     const card = el("div", "card");
     const head = el("header", "card-head");
-    head.append(el("p", "eyebrow", "A field of standing orders"));
     head.append(el("h1", "wordmark", "Overloaded"));
-    head.append(el("p", "lede",
-      "Two armies, one clock, and a book of orders that fights for you. Write the rules that answer a cut supply line, a sighting, a battery that will not stop, and then watch them run without you — or hand the whole book to your agent."));
     card.append(head);
 
-    card.append(this.field("Ground", this.mapRow));
+    card.append(this.field("Map", this.mapRow));
     card.append(this.field("Length", this.timeRow));
-    card.append(this.field("Opposition", this.diffRow));
+    card.append(this.field("Difficulty", this.diffRow));
+    card.append(this.field("Tutorial", this.tipsRow));
 
-    const go = el("button", "begin", "Take the field");
+    const go = el("button", "begin", "Start");
     go.addEventListener("click", () => this.handlers.begin());
     card.append(go);
     card.append(this.status);
@@ -91,26 +91,29 @@ export class Shell {
     this.result.dataset.on = match.phase === "result" ? "1" : "0";
     this.root.dataset.on = match.phase === "battle" ? "0" : "1";
 
-    const sig = `${match.settings.mapId}|${match.settings.timeLimitS}|${match.settings.difficulty}`;
+    const sig = `${match.settings.mapId}|${match.settings.timeLimitS}|${match.settings.difficulty}|${this.tipsOn}`;
     if (sig !== this.mapSig) {
       this.mapSig = sig;
       this.paintChoices(match);
     }
     this.status.textContent = webmcp.registered
-      ? `${webmcp.count} tools published to this page — an agent can read the field and write the order book.`
-      : "No agent bridge on this page. Everything below is still yours to drive by hand.";
+      ? `Agent tools available (${webmcp.count})`
+      : "";
     this.status.dataset.on = webmcp.registered ? "1" : "0";
 
     if (match.phase === "result") this.paintResult(match);
   }
 
   private paintChoices(match: Match) {
+    // Pick a map by looking at it, not by reading what it is meant to teach.
     this.mapRow.replaceChildren(...MAP_IDS.map((id) => {
       const map = MAPS[id];
-      const button = el("button", "choice");
+      const button = el("button", "choice map-choice");
       button.dataset.on = match.settings.mapId === id ? "1" : "0";
+      const frame = el("span", "thumb");
+      frame.append(mapThumb(map, 260));
+      button.append(frame);
       button.append(el("strong", undefined, map.name));
-      button.append(el("span", undefined, map.job));
       button.addEventListener("click", () => this.handlers.setMap(id));
       return button;
     }));
@@ -122,14 +125,25 @@ export class Shell {
       return button;
     }));
 
-    this.diffRow.replaceChildren(...DIFFICULTY.map(([level, name, note]) => {
-      const button = el("button", "choice");
+    this.diffRow.replaceChildren(...DIFFICULTY.map(([level, name]) => {
+      const button = el("button", "choice", name);
       button.dataset.on = match.settings.difficulty === level ? "1" : "0";
-      button.append(el("strong", undefined, name));
-      button.append(el("span", undefined, note));
       button.addEventListener("click", () => this.handlers.setDifficulty(level));
       return button;
     }));
+
+    this.tipsRow.replaceChildren(...([["On", true], ["Off", false]] as const).map(([name, on]) => {
+      const button = el("button", "choice", name);
+      button.dataset.on = this.tipsOn === on ? "1" : "0";
+      button.addEventListener("click", () => this.handlers.setTips(on));
+      return button;
+    }));
+  }
+
+  /** Mirror the coach's own state, which outlives a single match. */
+  setTips(on: boolean) {
+    this.tipsOn = on;
+    this.mapSig = "";
   }
 
   private paintResult(match: Match) {

@@ -15,10 +15,9 @@ import type { Board } from "../render/board";
  * formation is standing.
  */
 
-const PLAYER = { ink: "#2f5fa8", wash: "rgba(63,116,196,0.20)", light: "#8ab0ee" };
-const ENEMY = { ink: "#a8392c", wash: "rgba(184,64,48,0.20)", light: "#e79082" };
-const NEUTRAL = { ink: "#8a7a52", wash: "rgba(150,132,86,0.14)", light: "#d3c08a" };
-/** Unsurveyed country: warm blank chart, never a void. */
+const PLAYER = { ink: "#2f5fa8", wash: "rgba(63,116,196,0.075)", light: "#8ab0ee" };
+const ENEMY = { ink: "#a8392c", wash: "rgba(184,64,48,0.075)", light: "#e79082" };
+const NEUTRAL = { ink: "#8a7a52", wash: "rgba(150,132,86,0.05)", light: "#d3c08a" };
 /**
  * Ground nobody has walked yet.
  *
@@ -28,38 +27,14 @@ const NEUTRAL = { ink: "#8a7a52", wash: "rgba(150,132,86,0.14)", light: "#d3c08a
  * Unsurveyed ground should recede quietly and let the board be the bright
  * thing.
  */
-const VELLUM = "#1e2531";
-const SHADE = "rgba(14,18,25,0.52)";
+// Unexplored ground is washed, not blanked. An opaque veil over everything
+// the army has not walked past makes a 56-tile field look like a small
+// rectangle floating in the dark, so the land shows faintly through and the
+// player can see the shape of the country they have yet to scout.
+const UNSEEN = "rgba(15,16,19,0.76)";
+const SHADE = "rgba(15,16,19,0.3)";
 /** How far the fog frontier is feathered, in veil pixels. */
 const FEATHER = 5;
-
-/**
- * Paper grain for the unsurveyed country: one small tile of speckle, built
- * once and repeated. Sampling a hash once per map tile instead gave a
- * checkerboard the size of the board.
- */
-let grain: CanvasPattern | null = null;
-const paper = (ctx: CanvasRenderingContext2D) => {
-  if (grain) return grain;
-  const tile = document.createElement("canvas");
-  tile.width = 64;
-  tile.height = 64;
-  const paint = tile.getContext("2d");
-  if (!paint) return null;
-  const image = paint.createImageData(64, 64);
-  for (let i = 0; i < 64 * 64; i += 1) {
-    const flake = Math.random();
-    const light = flake > 0.5;
-    image.data[i * 4] = light ? 92 : 8;
-    image.data[i * 4 + 1] = light ? 104 : 12;
-    image.data[i * 4 + 2] = light ? 124 : 18;
-    // Barely there. At three times this it read as sandpaper.
-    image.data[i * 4 + 3] = Math.round(Math.abs(flake - 0.5) * 30);
-  }
-  paint.putImageData(image, 0, 0);
-  grain = ctx.createPattern(tile, "repeat");
-  return grain;
-};
 
 const tone = (side: Owner) => (side === "player" ? PLAYER : side === "enemy" ? ENEMY : NEUTRAL);
 
@@ -288,27 +263,8 @@ export class Overlay {
     ctx.save();
     ctx.filter = `blur(${FEATHER}px)`;
     fog(SHADE, (i) => !vision.seen[i] && Boolean(vision.explored[i]));
-    fog(VELLUM, (i) => !vision.explored[i]);
-    // Twice: one pass of blurred paper is translucent at the frontier, and
-    // unexplored ground should be opaque a tile in from the edge.
-    fog(VELLUM, (i) => !vision.explored[i]);
+    fog(UNSEEN, (i) => !vision.explored[i]);
     ctx.restore();
-    const speckle = paper(ctx);
-    if (speckle) {
-      ctx.save();
-      ctx.beginPath();
-      for (let y = 0; y < map.height; y += 1) {
-        for (let x = 0; x < map.width; x += 1) {
-          if (!vision.explored[y * map.width + x]) ctx.rect(x, y, 1, 1);
-        }
-      }
-      ctx.clip();
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.fillStyle = speckle;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.restore();
-      ctx.setTransform(pixelsPerTile, 0, 0, pixelsPerTile, 0, 0);
-    }
     this.board.veilPainted();
   }
 
@@ -418,11 +374,12 @@ export class Overlay {
     this.muzzle = this.muzzle.filter((puff) => now - puff.at < 0.35);
     for (const puff of this.muzzle) {
       const age = (now - puff.at) / 0.35;
+      if (age < 0) continue;
       const at = this.board.project(puff.x, heightAt(match.world, puff.x, puff.z) + 2.4, puff.z);
       if (at.behind) continue;
       ctx.fillStyle = `rgba(255,220,150,${(0.5 * (1 - age)).toFixed(3)})`;
       ctx.beginPath();
-      ctx.arc(at.x, at.y, (3 + age * 9) * Math.max(0.5, this.board.zoom), 0, Math.PI * 2);
+      ctx.arc(at.x, at.y, Math.max(0.5, (3 + age * 9) * Math.max(0.5, this.board.zoom)), 0, Math.PI * 2);
       ctx.fill();
     }
   }

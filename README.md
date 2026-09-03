@@ -108,13 +108,17 @@ Any static host will serve `dist` as-is.
 |---|---|
 | Select | Click a formation's banner, or drag a marquee |
 | Order | Right-click the ground |
-| <kbd>V</kbd> <kbd>H</kbd> <kbd>A</kbd> | March, hold, attack |
-| <kbd>G</kbd> <kbd>C</kbd> <kbd>F</kbd> <kbd>R</kbd> | Bombard, charge, fall back, reserve |
-| <kbd>B</kbd> <kbd>E</kbd> | Site a redoubt, centre on headquarters |
-| <kbd>P</kbd> <kbd>Space</kbd> <kbd>M</kbd> | Pause, pause, mute |
+| <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or arrows | Pan. Middle-drag works too, and the wheel zooms |
+| <kbd>Q</kbd> <kbd>E</kbd> <kbd>R</kbd> <kbd>T</kbd> | March, hold, attack, bombard |
+| <kbd>F</kbd> <kbd>G</kbd> <kbd>C</kbd> | Charge, fall back, reserve |
+| <kbd>B</kbd> <kbd>Home</kbd> | Site a redoubt, centre on headquarters |
+| <kbd>Space</kbd> or <kbd>P</kbd> <kbd>M</kbd> | Pause, mute |
 | <kbd>1</kbd>-<kbd>4</kbd> | Game speed |
 | <kbd>Esc</kbd> | Cancel the pending order, then the selection |
-| Wheel | Zoom. Middle-drag or the arrow keys to pan |
+
+Every order shortcut is printed on its own button in the tray, so none of it
+has to be memorised. The order keys sit to the right of WASD so one hand can
+pan and order without moving.
 
 ## Layout
 

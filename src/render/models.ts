@@ -151,8 +151,17 @@ const infantry = (): Kit => {
     place(cyl(0.34, 0.34, 0.06, 8, 0x141210), 0, 2.56, 0.05),
     place(box(0.2, 0.16, 0.04, BRASS), 0, 2.78, 0.28),
     place(cyl(0.08, 0.03, 0.44, 5, 0xe4dfd0), 0, 3.3, -0.04),
-    place(box(0.07, 1.9, 0.07, LEATHER), 0.3, 1.9, 0.2, 0.18, 0, 0.1),
-    place(box(0.045, 0.44, 0.045, 0xc2c6cc), 0.4, 3.0, 0.03, 0.18, 0, 0.1),
+    // Shouldered musket, in three pieces along one axis.
+    //
+    // It was a single dark batten the colour of the coat, 7cm thick, with the
+    // bayonet mounted on the wrong side of it -- place() turns Rx then Rz, so
+    // the barrel actually leans -X/+Z as it rises and the old bayonet at
+    // +X/-Z floated clear of the muzzle. Rebuilt on the true axis, in pale
+    // stock and bright steel: the tips stand above the shakos, which is what
+    // makes a line of infantry read as a line and not a row of blocks.
+    place(box(0.11, 1.0, 0.11, OAK), 0.52, 1.545, 0.12, -0.12, 0, 0.08),
+    place(box(0.085, 1.05, 0.085, 0x55585f), 0.439, 2.559, -0.003, -0.12, 0, 0.08),
+    place(box(0.05, 0.5, 0.05, 0xd6dae0), 0.378, 3.326, -0.095, -0.12, 0, 0.08),
   ]);
   return { team, body };
 };
@@ -162,12 +171,18 @@ const cavalry = (): Kit => {
   const team = weld([
     place(box(0.94, 0.92, 0.62, COAT_MASK), 0, 3.0, -0.08),
     place(box(1.4, 0.16, 1.06, COAT_MASK), 0, 2.5, -0.1),
+    place(box(0.2, 0.86, 0.2, COAT_MASK), -0.44, 2.78, 0.3, 0.68),
+    place(box(0.2, 0.86, 0.2, COAT_MASK), 0.44, 2.78, 0.3, 0.68),
   ]);
   const body = weld([
     place(box(1.06, 1.14, 2.5, HIDE), 0, 1.86, 0),
     place(box(0.9, 0.86, 0.9, HIDE_LIT), 0, 2.06, 0.98, -0.32),
-    place(box(0.62, 0.5, 0.94, HIDE_LIT), 0, 2.42, 1.5, -0.5),
-    place(box(0.5, 0.34, 0.3, 0x2e2119), 0, 2.32, 1.92, -0.5),
+    // Neck slimmer than the chest and a longer muzzle, so the front of the
+    // horse is a head and not the corner of a crate.
+    place(box(0.46, 0.46, 0.98, HIDE_LIT), 0, 2.44, 1.5, -0.5),
+    place(box(0.34, 0.3, 0.66, 0x2e2119), 0, 2.3, 2.06, -0.42),
+    // Mane down the crest of the neck.
+    place(box(0.16, 0.2, 0.9, 0x2a1f16), 0, 2.72, 1.44, -0.5),
     place(box(0.26, 0.34, 0.14, HIDE), -0.2, 2.72, 1.66),
     place(box(0.26, 0.34, 0.14, HIDE), 0.2, 2.72, 1.66),
     place(box(0.3, 1.44, 0.32, HIDE), -0.36, 0.72, 0.88, 0.22),
@@ -179,8 +194,8 @@ const cavalry = (): Kit => {
     place(box(0.34, 0.2, 0.34, FELT), -0.36, 0.06, -1.0),
     place(box(0.34, 0.2, 0.34, FELT), 0.36, 0.06, -1.0),
     place(cone(0.24, 1.0, 5, 0x2e2119), 0, 2.16, -1.34, 0.9),
-    place(box(0.3, 0.92, 0.3, BUFF), -0.42, 2.66, 0.06, 0.5),
-    place(box(0.3, 0.92, 0.3, BUFF), 0.42, 2.66, 0.06, 0.5),
+    place(ball(0.13, SKIN), -0.5, 2.42, 0.72),
+    place(ball(0.13, SKIN), 0.5, 2.42, 0.72),
     place(ball(0.28, SKIN), 0, 3.62, -0.06),
     place(cyl(0.34, 0.32, 0.56, 8, FELT), 0, 4.0, -0.08),
     place(cyl(0.1, 0.03, 0.5, 5, 0xd8d3c4), 0, 4.42, -0.16),

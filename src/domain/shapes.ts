@@ -1,5 +1,34 @@
 import type { Shape } from "./types";
 
+/**
+ * Pull a set of slots back onto its own centroid.
+ *
+ * Every shape here is laid out from its front rank backwards, so the mean of
+ * the offsets sits behind the origin rather than on it. That is invisible
+ * while a formation is marching to a cell, but a formation holding ground
+ * takes its own centre as the origin -- so each frame the slots were placed
+ * half a rank behind where the men already were, the men walked back to them,
+ * and the whole formation crept backwards off the map. Centring the offsets
+ * makes the origin mean the middle of the formation, which is what every
+ * caller already assumed.
+ */
+const centred = (slots: Array<{ x: number; z: number }>) => {
+  if (!slots.length) return slots;
+  let mx = 0;
+  let mz = 0;
+  for (const slot of slots) {
+    mx += slot.x;
+    mz += slot.z;
+  }
+  mx /= slots.length;
+  mz /= slots.length;
+  for (const slot of slots) {
+    slot.x -= mx;
+    slot.z -= mz;
+  }
+  return slots;
+};
+
 const slotOffsets = (shape: Shape, count: number, spacing: number, facing: number) => {
   const s = Math.max(1.6, spacing);
   const slots: { x: number; z: number }[] = [];
@@ -17,7 +46,7 @@ const slotOffsets = (shape: Shape, count: number, spacing: number, facing: numbe
       const col = i % width;
       place((col - 0.5) * s, -row * s);
     }
-    return slots;
+    return centred(slots);
   }
 
   if (shape === "square") {
@@ -37,7 +66,7 @@ const slotOffsets = (shape: Shape, count: number, spacing: number, facing: numbe
       place(0, 0);
       i += 1;
     }
-    return slots;
+    return centred(slots);
   }
 
   if (shape === "skirmish") {
@@ -48,7 +77,7 @@ const slotOffsets = (shape: Shape, count: number, spacing: number, facing: numbe
       const jitter = ((i * 17) % 7) - 3;
       place((col - (cols - 1) / 2) * s * 1.45 + jitter * 0.15, -row * s * 1.3);
     }
-    return slots;
+    return centred(slots);
   }
 
   const front = Math.ceil(count / 2);
@@ -58,7 +87,7 @@ const slotOffsets = (shape: Shape, count: number, spacing: number, facing: numbe
     const width = rank === 0 ? front : count - front;
     place((col - (width - 1) / 2) * s, -rank * s);
   }
-  return slots;
+  return centred(slots);
 };
 
 export const worldSlots = (
