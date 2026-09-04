@@ -1,88 +1,151 @@
 # Overloaded
 
-A browser real-time strategy game set in the Napoleonic period. You raise
-infantry, cavalry and artillery, group them into named formations, and fight
-over supply depots on a generated map.
+**A real-time strategy game with a battlefield too wide for one person — so hand half of it to your agent.**
 
-It also exposes the running match to an agent over
-[WebMCP](https://github.com/webmachinelearning/webmcp), so the same game can be
-played by hand, by an agent, or by both at once.
+**[Play it](https://overloaded.fpahmad36.workers.dev)** · 19 WebMCP tools over the live match
 
-![The board mid-deployment, with the standing-order book open on the right](docs/board.jpg)
+Built for the WebMCP Challenge.
 
-## The game
+![A brigade on the march, with the orders panel open on the right](docs/board.jpg)
 
-Crates are the only resource. Your headquarters produces them continuously, and
-so does every fort you raise and every depot you capture. Income
-only arrives if a structure can trace a walkable route back to your
-headquarters, so parking a formation across that route stops the money without
-a shot being fired. Depots start neutral and change hands when someone stands
-on one long enough.
+## The Problem
 
-Units belong to formations rather than being selected individually. A formation
-has a shape, a spacing, a facing and its orders. Artillery limbers when
-it marches and cannot fire until it stops; round shot is solved for the
-elevation that reaches the target, so a battery has a minimum range as well as
-a maximum one.
+Strategy games are the one genre deliberately unfair to your attention. More is always happening
+than one person can watch, and the skill being measured is triage — what you choose to lose.
 
-The match runs on a clock. Whoever holds more when it expires wins, and losing
-your headquarters ends it early.
+The usual shape of an agent-on-a-page demo is a form. The page holds still while the agent reads a
+field and writes a field. A battle does not hold still. By the time a model has read the board,
+decided, and answered, the battalion it was deciding about has been under fire for four seconds.
 
-## Standing orders
+So the agent is not handed a mouse. It is handed the vocabulary a commander actually uses — named
+formations, named ground, and **standing orders**: instructions the army carries out on its own, the
+instant they are set off, with no model in the loop. The agent is not playing faster than you. It is
+deciding what should happen while nobody is watching.
 
-Rather than clicking every reaction, you write orders the army carries out on
-its own. An order is written to one named formation or one named base, and it
-is set off by one named thing:
+## One Match, Measured
+
+Opening the live site in a WebMCP-capable browser and saying nothing more than:
+
+> *Take the field. Call `overview` first, then fight it however you like — I am not touching the keyboard.*
+
+| | |
+|---|---|
+| Difficulty | Medium |
+| Decided at | **4:08** |
+| Men standing at the end | **55 against 24** |
+| Standing orders written | 5 — three fired without being asked again |
+| Clicks, keystrokes or pixel coordinates | **none** |
+
+The last row is the point. Nothing in that match was a screenshot, a coordinate guess or a
+synthesised click. Every one of those decisions was a named formation being given named ground.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    H["your pointer<br/><i>right-click, hotkey, panel</i>"] --> C
+    A["your agent<br/><i>19 WebMCP tools</i>"] --> C
+    C["commands.ts"] --> M["one Match"]
+    M --> UI["board · panels · dispatches"]
+    M -- "report raised" --> R["orders held by the thing<br/>that reported"]
+    R -- "same instant" --> M
+```
+
+There is no agent mode and no shadow copy of the battle. `issue` is the function a right-click
+calls; `add_rule` is the function the **+ NEW** button calls. An agent's order repaints the panel it
+did not touch, and an order you wrote by hand is the same object the agent can amend.
+
+The right-hand loop is the part that matters in a real-time game. Orders are not swept on a timer —
+they belong to the thing they watch, and the report that sets one off dispatches it synchronously.
+A two-second sweep is the difference between a battalion pulled out and a battalion gone.
+
+## Orders
+
+An order names one formation or one base, one thing to watch, and one piece of ground:
 
 > **Alpha** attacks **the attacker** when it comes under fire.
-> **Headquarters** raises **16 infantry** when the war chest passes 800 crates.
+>
+> **Headquarters** raises **16 infantry** when the war chest passes 1200 crates.
 
-Nothing in an order is a wildcard and nothing in it is ground you cannot point
-at. The thing being watched can be a formation, a base, or your own war chest.
-A formation reports `under_fire`, `spotted`, `weakened`, `arrived`, `idle` and
-`destroyed`; a base reports `threatened`, `supply_cut`, `supply_restored`,
-`captured`, `lost` and `destroyed`; the chest reports `supply_above`. A
-formation can be told to `move`, `hold`, `attack_area`, `retreat` or `reserve`,
-cavalry can `charge` and artillery can `bombard`; a base can `recruit`. The
-ground an order aims at is the attacker that set it off, a named formation, a
-named base, or a spot you mark on the map.
+Nothing in it is a wildcard and nothing in it is ground you cannot point at — "any formation" at
+"wherever it happened" is an order nobody can predict the consequences of, least of all the person
+who wrote it. The one free-floating place is *the attacker*, and it is offered only when the thing
+being watched actually saw one.
 
-An order belongs to the thing it watches. There is no sweep and no interval:
-the instant that thing reports, its orders go out.
+That sentence is the whole interface: it is what the panel lists, what the dispatch feed reports,
+and what `add_rule` hands back, so a player and a model never read two descriptions of one object.
+What sets an order off lives behind the gear rather than in the list, because a list you scan
+mid-battle should read as orders, not as specifications.
 
-## Agent control
+Every picker is filtered by what the rest of the order already says. A battery is never offered a
+charge, a battalion is never offered a bombardment, and a base can only raise men — so the failure
+where an agent writes a well-formed order that can never once fire is unreachable rather than
+merely discouraged. → [`rules.ts`](src/domain/rules.ts)
 
-The game registers its tools on `document.modelContext` at load. That works in
-ChatGPT's in-app browser, natively in Chrome 152, and in Chrome 149+ with
-`chrome://flags/#enable-webmcp-testing` enabled. If `document.modelContext` is
-absent the boot screen says so and the game plays normally.
+![The order card, opened from the panel](docs/order.jpg)
 
-Formations are addressed by name, so instructions read like orders:
+## Design
 
-> Call `overview`. Raise a battery at the headquarters and bind it as
-> `Battery`. Then write Battery a standing order: it bombards the attacker
-> when it comes under fire.
+**The agent gets the same fog you do.** Every read goes through the same visibility test the
+renderer draws with: unseen formations are absent, and an enemy's strength and equipment are never
+in the payload, only what your side can make out. An agent that could read ground truth would be
+solving a different game to the one on the screen. → [`observe.ts`](src/domain/observe.ts)
 
-| Tool | Does |
-|---|---|
-| `overview` | Strength, income, formations, structures and their supply state |
-| `inspect_binding` | One formation: members, order, position, casualties |
-| `inspect_structure` | One base: build progress, yield, supply route |
-| `inspect_cell` | Terrain, height, occupants and cover at a map cell |
-| `inspect_contact` | What is known about a sighted enemy formation |
-| `read_alerts` | The dispatch feed |
-| `list_rules` | The standing orders, and the whole vocabulary for writing them |
-| `recruit` | Raise infantry, cavalry or artillery at a connected base |
-| `build_work` | Site a fort, barracks, stables, foundry or watchtower |
-| `bind`, `unbind`, `rename_binding` | Regroup and name formations |
-| `issue` | Give a formation its orders now |
-| `add_rule`, `update_rule`, `remove_rule` | Write, amend and strike standing orders |
-| `set_match`, `start_battle`, `set_paused` | Map, difficulty, clock |
+**One vocabulary, published twice.** The triggers, actions and arms are a single set of constants;
+the dropdowns build themselves from it and so does the tool schema. An order written by hand and one
+written by a model are the same record, so neither side can express something the other cannot read.
+→ [`constants.ts`](src/domain/constants.ts), [`register.ts`](src/webmcp/register.ts)
 
-The seven inspection tools carry `readOnlyHint`, so an agent can survey the
-field without changing it.
+**Money moves at walking pace.** Income only reaches you along ground a courier could actually
+walk, which is why the most effective thing an agent ever does here is not a charge — it is parking
+a battalion on a road. → [`supply.ts`](src/domain/supply.ts)
 
-## Running it
+**Nothing is loaded from an asset file.** Every man, horse, gun and building is assembled from boxes
+and cylinders in code, the ground texture is painted to a canvas at load, and every sound — the
+bugle calls, the musketry, the cannon and the reverb they sit in — is synthesised through the Web
+Audio API. → [`models.ts`](src/render/models.ts), [`terrainArt.ts`](src/ui/terrainArt.ts),
+[`sound.ts`](src/audio/sound.ts)
+
+## The 19 Tools
+
+```
+overview · inspect_binding · inspect_structure · inspect_cell · inspect_contact
+read_alerts · list_rules
+recruit · build_work · bind · unbind · rename_binding · issue
+add_rule · update_rule · remove_rule
+set_match · start_battle · set_paused
+```
+
+The first seven carry `readOnlyHint`, so an agent can survey the whole field without changing it.
+They register the standard way, with no adapter and no shim:
+
+```js
+await document.modelContext.registerTool({
+  name: "issue",
+  title: "Order a formation",
+  description: "Give a named formation its orders now: march, hold, attack, bombard, charge, fall back, reserve.",
+  inputSchema: { type: "object", additionalProperties: false, required: ["name", "order"], properties: { /* ... */ } },
+  execute: ({ name, ...patch }) =>
+    ({ content: [{ type: "text", text: JSON.stringify(issue(match, name, patch)) }] }),
+  annotations: { readOnlyHint: false },
+});
+```
+
+Every schema is closed, so a misspelt key is an error rather than a silent no-op, and every answer
+is one envelope with either `data` or a coded `error`. That works natively in Chrome 152, in Chrome
+149+ behind `chrome://flags/#enable-webmcp-testing`, and in ChatGPT's in-app browser. Where
+`document.modelContext` is absent the title screen says so and the game plays normally by hand.
+
+## Stack
+
+TypeScript (strict, `noUncheckedIndexedAccess`) · Vite 8 · [three.js](https://threejs.org/) ·
+Web Audio API · WebMCP (`webmcp-types`) · Cloudflare Workers.
+
+No backend, no database, no model API, and no art pipeline: 10,400 lines of TypeScript and 184 KB
+gzipped, most of it three.js. `src/domain` imports neither the DOM nor the renderer, so the match is
+one object no matter which side is driving it.
+
+## Run It
 
 ```bash
 npm install
@@ -93,59 +156,24 @@ npm run dev
 npm run typecheck
 npm run lint
 npm run build
+npm run deploy     # Cloudflare Workers
 ```
 
-Deploying is a static upload. For Cloudflare Pages:
+## Try The Agent Path
 
-```bash
-npx wrangler login
-npm run deploy
-```
+Open the live site in a WebMCP-capable browser, start a match, and say:
 
-Any static host will serve `dist` as-is.
+> Call `overview`. Raise a battery at the headquarters and bind it as *Battery*, then write it a
+> standing order: it bombards the attacker when it sights the enemy. Put Alpha on the nearest depot
+> and tell me what it finds.
 
-## Controls
+Then leave it alone and watch the dispatches. Ask it for an order that sends a battalion to
+"wherever the fighting is" and it cannot — it will make you name the ground.
 
-| | |
-|---|---|
-| Select | Click a formation's banner, or drag a marquee |
-| Order | Right-click the ground |
-| <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or arrows | Pan. Middle-drag works too, and the wheel zooms |
-| <kbd>Q</kbd> <kbd>E</kbd> <kbd>R</kbd> <kbd>T</kbd> | March, hold, attack, bombard |
-| <kbd>F</kbd> <kbd>G</kbd> <kbd>C</kbd> | Charge, fall back, reserve |
-| Hold <kbd>Space</kbd> | Show every formation's orders at once |
-| <kbd>B</kbd> <kbd>L</kbd> <kbd>Home</kbd> | Site a work, change the field lens, centre on headquarters |
-| <kbd>P</kbd> <kbd>M</kbd> | Pause, mute |
-| <kbd>1</kbd>-<kbd>4</kbd> | Game speed |
-| <kbd>Esc</kbd> | Cancel the pending order, then the selection |
-
-Every order shortcut is printed on its own button in the tray, so none of it
-has to be memorised. The order keys sit to the right of WASD so one hand can
-pan and order without moving.
-
-## Layout
-
-| Path | Contents |
-|---|---|
-| `src/domain/` | Match state, rules, supply routing, pathfinding, line of sight, map generation, the opposing AI |
-| `src/webmcp/` | Tool registration and argument validation |
-| `src/render/` | `models.ts` builds every unit and building from primitives and merges them into instanced meshes; `board.ts` is terrain, water, fog, camera and lighting |
-| `src/ui/` | `terrainArt.ts` bakes the ground texture at load; `overlay.ts` draws fog, borders, supply lines and banners each frame; `hud.ts` and `ruleBook.ts` are the panels |
-| `src/audio/` | Sound synthesis |
-
-Nothing is loaded from an asset file. Models are built from boxes, cylinders
-and spheres in code, the ground texture is drawn to a canvas at load, and every
-sound is synthesised through the Web Audio API, including the bugle calls,
-musketry, cannon and the reverb they sit in.
-
-`src/domain` has no DOM or renderer imports.
-
-## Built with
-
-TypeScript, Vite, [three.js](https://threejs.org/), the Web Audio API and
-Cloudflare Pages. Third-party notices are in
-[`public/licenses/NOTICE.txt`](public/licenses/NOTICE.txt).
+Playing it yourself needs no manual: every order key is printed on its own button, and the title
+screen carries a controls card and a tutorial.
 
 ## Licence
 
-MIT. See [`LICENSE`](LICENSE).
+MIT — see [`LICENSE`](LICENSE). Third-party notices are in
+[`public/licenses/NOTICE.txt`](public/licenses/NOTICE.txt).
