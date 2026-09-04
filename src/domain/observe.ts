@@ -1,10 +1,10 @@
 import { WORKS, WORK_KINDS, WORK_REACH_TILES, TILE_M } from "./constants";
 import type { WorkKind } from "./constants";
-import { describeRule, type Naming } from "./rules";
+import { ACTIONS_FOR, describeRule, TRIGGERS_FOR, type Naming } from "./rules";
 import { cellOf, terrainAt } from "./terrain";
 import { unitCost } from "./match";
 import type { Match } from "./match";
-import type { Cell, CommandResult, Side } from "./types";
+import type { Binding, Cell, CommandResult, Side, Structure } from "./types";
 
 const terrainGlyph: Record<string, string> = {
   open: ".",
@@ -119,6 +119,28 @@ export const overview = (match: Match, side: Side = "player") => {
 const nearbyKnown = (match: Match, side: Side, cell: Cell) =>
   match.contacts(side).some((contact) => Math.hypot(contact.cell.x - cell.x, contact.cell.y - cell.y) <= 3);
 
+/**
+ * What this formation can be ordered to do, and what it can report.
+ *
+ * The panel filters its dropdowns with these, so an agent that only had the
+ * flat vocabulary was guessing at what the interface already knows: a battery
+ * cannot charge, and only a watch that saw an enemy can send anyone after "the
+ * attacker". Reported per object so the guess is unnecessary.
+ */
+const bindingCapability = (match: Match, binding: Binding) => {
+  const arm = match.bindingUnits(binding)[0]?.type ?? null;
+  return {
+    arm,
+    canBeOrdered: ACTIONS_FOR("binding", arm),
+    reports: TRIGGERS_FOR.binding,
+  };
+};
+
+const structureCapability = (structure: Structure) => ({
+  canBeOrdered: structure.kind === "depot" ? [] : ACTIONS_FOR("structure", null),
+  reports: TRIGGERS_FOR.structure,
+});
+
 export const inspectBinding = (match: Match, name: string, side: Side = "player"): CommandResult => {
   const binding = match.bindingByName(name);
   if (!binding || binding.side !== side) {
@@ -136,6 +158,7 @@ export const inspectBinding = (match: Match, name: string, side: Side = "player"
       order: binding.order,
       establishment: binding.establishment,
       cell: match.bindingCell(binding),
+      ...bindingCapability(match, binding),
       members: members.map((unit) => ({
         id: unit.id,
         type: unit.type,
@@ -155,6 +178,7 @@ export const inspectStructure = (match: Match, id: string, side: Side = "player"
       ...structure,
       hp: Math.round(structure.hp),
       mine: structure.side === side,
+      ...(structure.side === side ? structureCapability(structure) : {}),
       route: structure.route,
     },
   };

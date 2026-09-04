@@ -7,7 +7,9 @@ import { WORK_KINDS, WORKS,
 } from "../domain/constants";
 import { FIELD_SIZES } from "../domain/maps";
 import type { Match } from "../domain/match";
-import { ACTION_ORDER, describeRule, TRIGGER_TEXT } from "../domain/rules";
+import {
+  ACTION_ORDER, ACTIONS_FOR, describeRule, HAS_ATTACKER, NEEDS_PLACE, TRIGGER_TEXT, TRIGGERS_FOR,
+} from "../domain/rules";
 import { naming } from "../domain/observe";
 import type {
   Cell, Load, MapId, OrderActor, OrderKind, OrderPlace, Priority, Quality, Rule, Shape, Watched,
@@ -254,10 +256,36 @@ export const createTools = (match: Match): WebMCP.ModelContextTool[] => [
         data: {
           vocabulary: {
             triggers: TRIGGERS.map((trigger) => ({ trigger, reads: TRIGGER_TEXT[trigger] })),
-            actions: ACTIONS.map((action) => ({ action, reads: ACTION_ORDER[action] })),
+            actions: ACTIONS.map((action) => ({
+              action, reads: ACTION_ORDER[action], needsPlace: NEEDS_PLACE(action),
+            })),
             watchable: "one named formation, one structure id, or \"chest\"",
             places: "\"attacker\", a formation name, a structure id, or { x, y }",
+            attackerOnlyAfter: TRIGGERS.filter(HAS_ATTACKER),
           },
+          // What each of your things can actually be told to do, and what it
+          // can report. The panel filters its dropdowns with exactly this, so
+          // an order built from it cannot be one that could never fire.
+          canOrder: [
+            ...[...match.bindings.values()]
+              .filter((binding) => binding.side === "player" && match.bindingUnits(binding).length > 0)
+              .map((binding) => {
+                const arm = match.bindingUnits(binding)[0]?.type ?? null;
+                return {
+                  actor: binding.name, kind: "binding", arm,
+                  actions: ACTIONS_FOR("binding", arm),
+                  reports: TRIGGERS_FOR.binding,
+                };
+              }),
+            ...match.structuresOf("player")
+              .filter((structure) => structure.kind !== "depot")
+              .map((structure) => ({
+                actor: structure.id, kind: "structure", name: structure.name,
+                actions: ACTIONS_FOR("structure", null),
+                reports: TRIGGERS_FOR.structure,
+              })),
+            { actor: "chest", kind: "chest", actions: [], reports: TRIGGERS_FOR.chest },
+          ],
           rules: match.rules.filter((rule) => rule.side === "player").map((rule) => ({
             id: rule.id,
             enabled: rule.enabled,
